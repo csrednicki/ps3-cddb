@@ -1,0 +1,14 @@
+node_modules
+coverage
+dumps
+logs
+cache
+api/cache
+api/test
+api/tools
+.git
+.gitignore
+*.md
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -1,0 +1,35 @@
+{
+  "rawTocKeys": ["2c257b792121745685c4723e6fa4748b6ff78c867a54836f783c7f3d000000003115f34a20b0ed4962b93561"],
+  "tocKeys": [],
+  "_comment": "Fictional test fixture. rawTocKeys is kept identical to the TOC-derived key found in dumps/req_20260903_020421.bin so dump-e2e.test.js can still exercise the real request-parsing path against a seed album; the key itself is an opaque disc identifier, not creative content. All other fields (title, artist, tracks, label, etc.) are invented and do not describe any real release.",
+  "lookupOffsets": {
+    "frameOffsets": [150, 18000, 40000, 58000, 76000, 95000, 112000, 136000, 155000, 176000, 196000],
+    "leadoutFrame": 217000
+  },
+  "title": "Sample Sounds",
+  "artist": "Test Artist",
+  "albumArtist": "Test Artist",
+  "label": "Fixture Records",
+  "year": 2001,
+  "country": "XX",
+  "language": "English",
+  "imageUrl": "https://example.com/cover.jpg",
+  "genres": [{ "main": "Test", "sub": "Fixture", "third": "", "fourth": "" }],
+  "totalDuration": 2900,
+  "numDiscs": 1,
+  "discNumber": 1,
+  "revision": 1,
+  "tracks": [
+    { "title": "Opening Track", "artist": "Test Artist", "trackNumber": 1, "duration": 273 },
+    { "title": "Second Track", "artist": "Test Artist", "trackNumber": 2, "duration": 297 },
+    { "title": "Third Track", "artist": "Test Artist", "trackNumber": 3, "duration": 250 },
+    { "title": "Fourth Track", "artist": "Test Artist", "trackNumber": 4, "duration": 236 },
+    { "title": "Fifth Track", "artist": "Test Artist", "trackNumber": 5, "duration": 260 },
+    { "title": "Sixth Track", "artist": "Test Artist", "trackNumber": 6, "duration": 239 },
+    { "title": "Seventh Track", "artist": "Test Artist", "trackNumber": 7, "duration": 321 },
+    { "title": "Eighth Track", "artist": "Test Artist", "trackNumber": 8, "duration": 267 },
+    { "title": "Ninth Track", "artist": "Test Artist", "trackNumber": 9, "duration": 296 },
+    { "title": "Tenth Track", "artist": "Test Artist", "trackNumber": 10, "duration": 337 },
+    { "title": "Closing Track", "artist": "Test Artist", "trackNumber": 11, "duration": 271 }
+  ]
+}

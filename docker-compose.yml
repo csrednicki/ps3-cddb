@@ -1,0 +1,25 @@
+services:
+  ps3-cddb:
+    build: .
+    image: ps3-cddb:latest
+    container_name: ps3-cddb
+    restart: unless-stopped
+    # LAN IP of the machine running Docker - the PS3 will be pointed here
+    # as its DNS server. MUST be set (the container cannot auto-detect it).
+    environment:
+      - HOST_IP=${HOST_IP:?Set HOST_IP to your LAN IP, e.g. 192.168.1.10}
+      # - LOG_LEVEL=debug
+    ports:
+      # DNS (UDP + TCP) and HTTP - bound to the host's HOST_IP interface
+      # rather than every interface Docker can see (e.g. its internal bridge
+      # networks). This is deliberately public-facing when HOST_IP is a
+      # WAN-reachable address; abuse mitigation (rate limiting, dropping
+      # CHAOS-class recon queries) lives in api/src/dns-server.js instead.
+      - "${HOST_IP}:53:53/udp"
+      - "${HOST_IP}:53:53/tcp"
+      - "${HOST_IP}:80:80/tcp"
+    volumes:
+      # persist the gnudb album cache, request/response dumps and logs
+      - ./cache:/app/cache
+      - ./dumps:/app/dumps
+      - ./logs:/app/logs

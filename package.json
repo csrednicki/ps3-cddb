@@ -1,0 +1,21 @@
+{
+  "name": "ps3-cddb-api",
+  "version": "1.0.0",
+  "description": "PS3 CDDB metadata API emulator",
+  "main": "api/src/index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node api/src/index.js",
+    "test": "jest --runInBand --coverage --verbose --silent"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "dns2": "^3.1.1"
+  }
+}

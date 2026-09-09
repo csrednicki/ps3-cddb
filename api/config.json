@@ -1,0 +1,64 @@
+{
+  "client": {
+    "name": "PS3CddbEmulator",
+    "version": "1.0.0",
+    "userName": "AMG Test User"
+  },
+  "dns": {
+    "port": 53,
+    "hosts": [
+      "dmr.allmusic.com",
+      "dmrdev.allmusic.com"
+    ],
+    "answerIp": "0.0.0.0",
+    "upstream": "8.8.8.8",
+    "upstreamPort": 53,
+    "forwardUnknown": true,
+    "rateLimit": {
+      "maxPerSecondPerIp": 15
+    },
+    "blacklist": {
+      "violationWindowMs": 60000,
+      "violationsToBan": 5,
+      "banDurationMs": 600000
+    },
+    "ttl": 60,
+    "upstreamTimeoutMs": 3000
+  },
+  "http": {
+    "port": 80,
+    "path": "/sdkrequest",
+    "boundary": "---------------------------265001916915724",
+    "replyDelayMs": 3000,
+    "rateLimit": {
+      "maxPerSecondPerIp": 5
+    },
+    "blacklist": {
+      "violationWindowMs": 60000,
+      "violationsToBan": 5,
+      "banDurationMs": 600000
+    }
+  },
+  "logs": {
+    "dir": "logs"
+  },
+  "dumps": {
+    "dir": "dumps",
+    "logRequests": true,
+    "logResponses": true
+  },
+  "gnudbCache": {
+    "dir": "cache",
+    "ttlSeconds": 3600
+  },
+  "gnudb": {
+    "host": "gnudb.gnudb.org",
+    "email": "user@ps3",
+    "proto": "6",
+    "timeoutMs": 10000
+  },
+  "log": {
+    "level": "debug",
+    "color": true
+  }
+}
