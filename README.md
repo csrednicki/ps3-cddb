@@ -1,3 +1,5 @@
+[![Node.js CI](https://github.com/csrednicki/ps3-cddb/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/csrednicki/ps3-cddb/actions/workflows/ci.yml)
+
 # PS3 CDDB Proxy
 
 This project is a local proxy that **brings back online album metadata for audio CDs** played on the PS3 gaming console. It works by intercepting the PS3's metadata requests and answering them with data from [gnudb](https://gnudb.org/). The original metadata service was discontinued in early 2019, so without this proxy the console can no longer fetch CD information on its own.  **No jailbreak needed**. This works the same on retail firmware as it does on modded consoles, since it uses just a network setting.
