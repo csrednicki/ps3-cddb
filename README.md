@@ -8,7 +8,7 @@ When the PS3 plays an audio CD, it is trying to contact already disabled servers
 
 ## How it works
 
-1. The **DNS server** (port 53) intercepts the PS3's DNS queries for the console's original metadata servers and answers with your local IP address.
+1. The **DNS server** (port 53) intercepts the PS3's DNS queries for the console's original metadata servers and answers with your local IP address. By default uses `8.8.8.8` as DNS upstream. 
 2. The **HTTP server** (port 80) receives the PS3's binary `BIN ` TLV requests on `/sdkrequest`, translates the disc TOC into a gnudb (FreeDB) CDDB query, fetches matching album metadata, and replies with a binary response in the format the PS3 expects.
 3. Responses are cached on disk (`cache/`) to avoid hammering gnudb, and raw request/response dumps can be saved to `dumps/` for debugging.
 
