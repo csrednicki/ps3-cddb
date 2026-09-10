@@ -33,7 +33,7 @@ describe('HTTP multipart (extractMultipartBody)', () => {
 describe('BIN header (buildBinHeader)', () => {
   beforeEach(() => {
     // The MAC must be captured from a request (GET/POST) - we register the console
-    require('../src/consoles').registerConsole('001fa7c469ae', { source: 'get' });
+    require('../src/consoles').registerConsole('001122334455', { source: 'get' });
   });
 
   it('should build a 52-byte header matching the layout with LE selectors', () => {
