@@ -10,7 +10,7 @@ const { buildBinHeader } = require('../src/bin-header');
 const { encodeTocField } = require('../src/toc');
 
 jest.mock('../src/consoles', () => ({
-  getLastConsoleMac: () => '001fa7c469ae',
+  getLastConsoleMac: () => '001122334455',
 }));
 jest.mock('../src/logger', () => ({ info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() }));
 
@@ -27,7 +27,7 @@ const { parseRequest } = require('../src/request');
  * @returns {Buffer} the synthetic request body
  */
 function buildFullBody(opts = {}) {
-  const header = buildBinHeader({ secret: '001fa7c469ae' });
+  const header = buildBinHeader({ secret: '001122334455' });
   const nTracks = opts.nTracks ?? 2;
   const toc = opts.tocBytes ?? encodeTocField(nTracks, 30000, [1000, 3000]);
   const body = Buffer.alloc(0x80 + 4); // up to 0x83 (closer)
@@ -64,7 +64,7 @@ describe('parseRequest - error paths and edges', () => {
   it('should throw "body too short" when the body is below 0x50 but has valid magic', () => {
     // body 0x34..0x4F (>= HEADER_SIZE=0x34, < 0x50) with a valid "BIN " - skips the
     // magic error (thrown in buildBinHeader for <0x34) and hits "body too short".
-    const header = buildBinHeader({ secret: '001fa7c469ae' });
+    const header = buildBinHeader({ secret: '001122334455' });
     const body = Buffer.alloc(0x40);
     header.copy(body, 0);
     expect(() => parseRequest(body)).toThrow('body too short');

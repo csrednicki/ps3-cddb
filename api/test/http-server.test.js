@@ -51,7 +51,7 @@ const PORT = 18080;
  * @returns {Buffer} the raw HTTP request (headers + multipart body)
  */
 function buildMultipartRequest(tocBytes) {
-  const header = buildBinHeader({ secret: '001fa7c469ae' });
+  const header = buildBinHeader({ secret: '001122334455' });
   const body = Buffer.alloc(0x80 + 4);
   header.copy(body, 0);
   body.writeUInt32LE(0x34, 0x34); // header length marker
