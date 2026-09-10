@@ -411,6 +411,8 @@ describe('findAlbumLive - disk cache hit/miss', () => {
     expect(fetchCddbRecord).not.toHaveBeenCalled();
     expect(require('../src/logger').info).toHaveBeenCalledWith(expect.stringContaining('[cache] renewed:'));
     // the file must no longer look expired - a concurrent purge sweep must not delete it
-    expect(fs.statSync(file).mtimeMs).toBeGreaterThanOrEqual(before);
+    // (rounded: Windows round-trips mtime through 100ns FILETIME units, which can leave
+    // the ms-precision double a fraction below the exact value, e.g. ...417.999 vs ...418)
+    expect(Math.round(fs.statSync(file).mtimeMs)).toBeGreaterThanOrEqual(before);
   });
 });
