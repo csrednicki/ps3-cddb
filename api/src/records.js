@@ -125,4 +125,9 @@ function buildFieldsObject() {
   );
 }
 
-module.exports = { albumRecord, trackRecord, errorRecord, buildResponse };
+module.exports = {
+  albumRecord,
+  trackRecord,
+  errorRecord,
+  buildResponse,
+};
