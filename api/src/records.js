@@ -48,22 +48,20 @@ function albumRecord(album) {
     }));
   }
   const albumTracks = writeContainer([writeContainer(trackFields), writeI16(discNumber), writeI16(trackCount)]);
+  const fields = buildFieldsObject();
 
-  // 30 slots; an empty Buffer = "absent" (safe), a bare NUL = "empty string"
-  const af = new Array(30).fill(Buffer.alloc(0));
-  for (const s of [0, 2, 3, 5, 8, 12, 19, 20, 26, 27]) af[s] = writeStr('');
-  af[1] = writeStr(albumTitle); // album title
-  af[4] = writeStr(albumArtist); // album artist
-  af[6] = writeI16(trackCount); // album track count
-  af[7] = writeI16(discNumber); // disc number within set
-  af[9] = writeStr(albumGenre); // album genre
-  af[11] = writeI16(numDiscs); // total discs in set
-  af[15] = writeContainer([albumTracks]); // tracks group (tracklist, disc number, track count)
-  af[22] = writeYear(albumYear); // album year
-  af[28] = writeI16(0); // mandatory i16 (unknown)
-  af[29] = writeI16(7); // mandatory i16 (track view > 6, otherwise the PS3 plugin ignores the tracks)
+  fields[1] = writeStr(albumTitle); // album title
+  fields[4] = writeStr(albumArtist); // album artist
+  fields[6] = writeI16(trackCount); // album track count
+  fields[7] = writeI16(discNumber); // disc number within set
+  fields[9] = writeStr(albumGenre); // album genre
+  fields[11] = writeI16(numDiscs); // total discs in set
+  fields[15] = writeContainer([albumTracks]); // tracks group (tracklist, disc number, track count)
+  fields[22] = writeYear(albumYear); // album year
+  fields[28] = writeI16(0); // mandatory i16 (unknown)
+  fields[29] = writeI16(7); // mandatory i16 (track view > 6, otherwise the PS3 plugin ignores the tracks)
 
-  return writeContainer(af);
+  return writeContainer(fields);
 }
 
 /**
@@ -110,6 +108,21 @@ function buildResponse({ album = null, error = null } = {}) {
   if (!tags.length) tags.push('A');
   for (const t of tags) out.push(builders[t]());
   return Buffer.concat(out);
+}
+
+/**
+ * Builds the 30-slot fields array used as a base for record responses.
+ * An empty Buffer marks a slot as absent (safe default); a bare NUL
+ * (from `writeStr('')`) marks it as present but an empty string.
+ *
+ * @returns {Buffer[]} Array of 30 buffers, one per field slot.
+ */
+function buildFieldsObject() {
+  const emptyStringSlots = new Set([0, 2, 3, 5, 8, 12, 19, 20, 26, 27]);
+
+  return Array.from({ length: 30 }, (_, i) =>
+    emptyStringSlots.has(i) ? writeStr('') : Buffer.alloc(0)
+  );
 }
 
 module.exports = { albumRecord, trackRecord, errorRecord, buildResponse };
