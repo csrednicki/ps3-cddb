@@ -112,4 +112,24 @@ function buildResponse({ album = null, error = null } = {}) {
   return Buffer.concat(out);
 }
 
-module.exports = { albumRecord, trackRecord, errorRecord, buildResponse };
+/**
+ * Builds the 30-slot fields array used as a base for record responses.
+ * An empty Buffer marks a slot as absent (safe default); a bare NUL
+ * (from `writeStr('')`) marks it as present but an empty string.
+ *
+ * @returns {Buffer[]} Array of 30 buffers, one per field slot.
+ */
+function buildFieldsObject() {
+  const emptyStringSlots = new Set([0, 2, 3, 5, 8, 12, 19, 20, 26, 27]);
+
+  return Array.from({ length: 30 }, (_, i) =>
+    emptyStringSlots.has(i) ? writeStr('') : Buffer.alloc(0)
+  );
+}
+
+module.exports = {
+  albumRecord,
+  trackRecord,
+  errorRecord,
+  buildResponse,
+};
