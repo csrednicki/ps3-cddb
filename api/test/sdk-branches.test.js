@@ -106,15 +106,15 @@ describe('records.buildResponse - RESPONSE_FORMAT formats', () => {
     expect(parts[1].toString('utf8').replace(/\0/g, '')).toBe('A');
   });
 
-  it('should default a missing track artist to an empty string in the album track-group', () => {
-    // covers the `album.tracks[i].artist ?? ''` branch in albumRecord
+  it('should fall back to the album artist for a track without its own artist in the track-group', () => {
+    // covers the `album.tracks[i].artist || albumArtist` branch in albumRecord
     const rec = albumRecord({ title: 'X', artist: 'Y', genre: 'Z', tracks: [{ title: 'T1', artist: 'A' }, { title: 'T2' }] });
     const slots = readContainer(rec);
     const group = readContainer(readContainer(slots[15])[0]);
     const trackList = readContainer(group[0]);
     const t1 = readContainer(trackList[1]);
     const parts = readContainer(readContainer(t1[6])[0]);
-    expect(parts[1].toString('utf8').replace(/\0/g, '')).toBe('');
+    expect(parts[1].toString('utf8').replace(/\0/g, '')).toBe('Y'); // album artist fallback
   });
 });
 

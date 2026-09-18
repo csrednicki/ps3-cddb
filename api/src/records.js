@@ -4,7 +4,7 @@ const { TAGS, writeRecord, writeContainer, writeStr, writeYear, writeI16, writeI
 
 /**
  * Builds the container payload for one TRACK record.
- * @param {{title: string, artist?: string}} t - track title and (optional) artist
+ * @param {{title: string, artist?: string}} t - track title and artist (field 6); a missing artist falls back to the album artist in albumRecord
  * @returns {Buffer} the encoded track container
  */
 function trackRecord(t) {
@@ -44,7 +44,7 @@ function albumRecord(album) {
   for (let i = 0; i < trackCount; i++) {
     trackFields.push(trackRecord({
       title: album.tracks[i].title,
-      artist: album.tracks[i].artist ?? ''
+      artist: album.tracks[i].artist || albumArtist
     }));
   }
   const albumTracks = writeContainer([writeContainer(trackFields), writeI16(discNumber), writeI16(trackCount)]);
