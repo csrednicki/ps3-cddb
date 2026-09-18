@@ -250,6 +250,15 @@ describe('parseAlbum', () => {
     const rec = parseAlbum('DTITLE=A / B\nTTITLE0=X\nTTITLE5=Y\n', 3);
     expect(rec.tracks.length).toBe(1); // only index 0 < 3
   });
+
+  it('should parse DISCID into albumDiscId and keep only the first occurrence', () => {
+    const rec = parseAlbum('DISCID=b40bb90f\nDISCID=deadbeef\nDTITLE=A / B\n');
+    expect(rec.albumDiscId).toBe('b40bb90f');
+  });
+
+  it('should leave albumDiscId empty when there is no DISCID line', () => {
+    expect(parseAlbum('DTITLE=A / B\n').albumDiscId).toBe('');
+  });
 });
 
 describe('fetchData', () => {

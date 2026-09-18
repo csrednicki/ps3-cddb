@@ -143,10 +143,10 @@ function parseMatches(reply) {
  * Parses a gnudb "read" record's DTITLE/DYEAR/DGENRE/TTITLE lines into an album.
  * @param {string} text - raw gnudb record text
  * @param {number} [maxTracks=99] - highest TTITLE index to accept (out-of-range indices are ignored)
- * @returns {{albumArtist: string, albumTitle: string, albumGenre: string, albumYear: string, albumDisc: number, tracks: Array<{title: string}>}}
+ * @returns {{albumArtist: string, albumTitle: string, albumGenre: string, albumYear: string, albumDiscId: string, albumDisc: number, tracks: Array<{title: string}>}}
  */
 function parseAlbum(text, maxTracks = 99) {
-  const album = { albumArtist: '', albumTitle: '', albumGenre: '', albumYear: '', albumDisc: 0, tracks: [] };
+  const album = { albumArtist: '', albumTitle: '', albumGenre: '', albumYear: '', albumDiscId: '', albumDisc: 0, tracks: [] };
   const titles = new Array(maxTracks).fill('');
   let highest = -1;
 
@@ -161,6 +161,8 @@ function parseAlbum(text, maxTracks = 99) {
       } else {
         album.albumTitle = value;
       }
+    } else if (line.startsWith('DISCID=') && !album.albumDiscId) {
+      album.albumDiscId = line.slice(7).trim();
     } else if (line.startsWith('DYEAR=') && !album.albumYear) {
       album.albumYear = line.slice(6).trim();
     } else if (line.startsWith('DGENRE=') && !album.albumGenre) {

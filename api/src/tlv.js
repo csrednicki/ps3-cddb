@@ -94,12 +94,18 @@ function writeStr(s) {
 }
 
 /**
- * Encodes a year as plain ASCII digits, no NUL terminator (matches PS3 ground-truth captures).
- * @param {*} year - value to stringify (null/undefined become "0")
- * @returns {Buffer} the ASCII-encoded year
+ * Encodes a release date as ASCII "YYYY-MM-DD" (no NUL). Takes the first 4
+ * digits of the input as the year and defaults a missing month/day to 01-01.
+ * @param {*} value - a year ("2000"), a full date ("2000-05-12"), or nothing
+ * @returns {Buffer} the ASCII date, or an empty (absent) buffer when no valid year is present
  */
-function writeYear(year) {
-  return Buffer.from(`${year ?? '0'}`, 'ascii');
+function writeYear(value) {
+  const m = String(value ?? '').match(/(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?/);
+  if (!m || Number(m[1]) < 1) return Buffer.alloc(0);
+  const mm = Math.min(Math.max(Number(m[2] ?? 1), 1), 12);
+  const dd = Math.min(Math.max(Number(m[3] ?? 1), 1), 31);
+  const pad = (n) => String(n).padStart(2, '0');
+  return Buffer.from(`${m[1]}-${pad(mm)}-${pad(dd)}`, 'ascii');
 }
 
 /**

@@ -8,6 +8,7 @@ const log = require('./logger');
 const { loadConfig } = require('./config');
 const { startDnsServer } = require('./dns-server');
 const { startHttpServer } = require('./http-server');
+const { loadTestRecordFromEnv } = require('./albums');
 
 /**
  * Starts the emulator: logs the banner, then brings up the DNS and HTTP
@@ -19,6 +20,7 @@ async function main() {
   const cfg = loadConfig();
   log.info(`=== ${cfg.client.name} ${cfg.client.version} - CD audio metadata proxy ===`);
   log.info(`[config] answer IP: ${cfg.dns.answerIp} (set PS3 primary DNS to this address)`);
+  loadTestRecordFromEnv();
 
   try {
     // startDnsServer (dns2) already registers its own UDP socket internally

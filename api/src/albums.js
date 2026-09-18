@@ -18,6 +18,108 @@ const indexByRaw = new Map();
 const cache = new Map();
 const inflight = new Map();
 
+// Test mode (GNUDB_TEST_RECORD): one fixed gnudb record served for every disc
+// that is inserted, with the disc id recomputed from the disc actually in the
+// drive. Used to exercise the PS3 response path without touching gnudb.
+//
+// The record can be held either inline (setTestRecord, used by tests) or as a
+// file path (setTestRecordFile / GNUDB_TEST_RECORD). A path is re-read whenever
+// the file changes on disk, so editing the sample while the server runs takes
+// effect on the next disc without a restart.
+let testRecord = null;
+let testRecordPath = null;
+let testRecordMtime = -1;
+let testRecordSize = -1;
+
+/**
+ * Enables/disables test mode from an inline record: the raw gnudb record text
+ * to serve for every disc, or null/undefined to restore normal lookups.
+ * @param {string|null} [record] - raw gnudb record text (see api/samples/gnudb-sample.txt)
+ * @returns {void}
+ */
+function setTestRecord(record) {
+  testRecord = record ? String(record) : null;
+  testRecordPath = null;
+  testRecordMtime = -1;
+  testRecordSize = -1;
+}
+
+/**
+ * Enables/disables test mode from a file: the raw gnudb record is (re)read from
+ * `file` whenever its mtime/size change, so edits are picked up live.
+ * @param {string|null} [file] - path to a raw gnudb record file, or null to disable
+ * @returns {void}
+ */
+function setTestRecordFile(file) {
+  testRecordPath = file ? String(file) : null;
+  testRecord = null;
+  testRecordMtime = -1;
+  testRecordSize = -1;
+}
+
+/**
+ * Whether test mode is currently active.
+ * @returns {boolean} true when a test record (inline or file-backed) is configured
+ */
+function isTestMode() {
+  return testRecord !== null || testRecordPath !== null;
+}
+
+/**
+ * Resolves the raw gnudb record to serve right now. A file-backed record is
+ * re-read when its mtime/size differ from the cached ones; on a read error the
+ * last good content is kept (and a warning is logged) so a transient failure
+ * cannot take the server down mid-session.
+ * @returns {string|null} the record text, or null when test mode is inactive/unusable
+ */
+function currentTestRecord() {
+  if (!testRecordPath) return testRecord;
+  try {
+    const { mtimeMs, size } = fs.statSync(testRecordPath);
+    if (mtimeMs !== testRecordMtime || size !== testRecordSize) {
+      testRecord = fs.readFileSync(testRecordPath, 'utf8');
+      testRecordMtime = mtimeMs;
+      testRecordSize = size;
+      log.info(`[test] reloaded ${testRecordPath} (${size} B)`);
+    }
+  } catch (e) {
+    log.warn(`[test] cannot re-read ${testRecordPath} (${e.message}) - keeping last good record`);
+  }
+  return testRecord;
+}
+
+/**
+ * Loads test mode from the GNUDB_TEST_RECORD env var at startup. Accepts
+ * either a path to a raw gnudb record file or a truthy flag ("1"/"true"),
+ * which loads the bundled sample at api/samples/gnudb-sample.txt.
+ * @returns {boolean} true when a record was loaded
+ */
+function loadTestRecordFromEnv() {
+  const val = process.env.GNUDB_TEST_RECORD;
+  if (!val) return false;
+  const isFlag = /^(1|true|yes)$/i.test(val);
+  const file = isFlag ? path.join(__dirname, '..', 'samples', 'gnudb-sample.txt') : val;
+  setTestRecordFile(file);
+  if (!currentTestRecord()) {
+    log.error(`[test] GNUDB_TEST_RECORD: cannot read ${file} - falling back to gnudb`);
+    setTestRecordFile(null);
+    return false;
+  }
+  log.info(`[test] GNUDB_TEST_RECORD active - every disc answers with ${file} (edits are picked up live)`);
+  return true;
+}
+
+/**
+ * Rewrites the DISCID line of a raw gnudb record so it carries the disc id of
+ * the disc actually in the drive instead of the one from the test record.
+ * @param {string} record - raw gnudb record text
+ * @param {string} discId - disc id (8 hex digits) to write
+ * @returns {string} the record with its DISCID line replaced
+ */
+function withDiscId(record, discId) {
+  return String(record).replace(/^DISCID=.*$/m, `DISCID=${discId}`);
+}
+
 /**
  * Loads every seed album (.json) from `dir` and indexes it by its rawToc keys
  * for instant lookup, bypassing gnudb entirely for known discs.
@@ -252,6 +354,34 @@ async function lookupLive(req) {
 async function findAlbumLive(req) {
   const key = String(req.rawTocHex ?? '').toLowerCase();
   if (!key) return null;
+
+  // Test mode wins over every other source: whatever disc is inserted, answer
+  // with the fixed record, only swapping in that disc's own DISCID. A
+  // file-backed record is re-read here, so live edits take effect immediately.
+  const record = currentTestRecord();
+  if (record) {
+    const toc = tocFromRequest(req);
+    const discId = toc
+      ? getDiscId(toc.frameOffsets, toc.nTracks, toc.leadoutSeconds).toString(16).padStart(8, '0')
+      : null;
+    const served = discId ? withDiscId(record, discId) : record;
+    const album = parseAlbum(served, 99);
+    const built = {
+      title: album.albumTitle,
+      artist: album.albumArtist,
+      genre: album.albumGenre,
+      year: album.albumYear || '',
+      numDiscs: Math.max(1, album.albumDisc || 1),
+      discNumber: album.albumDisc || 1,
+      tracks: album.tracks,
+      __gnudbRecord: served,
+      __fromTest: true,
+      discId,
+    };
+    log.info(`[test] fixed record for discId=${discId ?? 'unknown'}: "${built.title}" - ${built.artist} (${built.tracks.length} tracks)`);
+    return built;
+  }
+
   if (cache.has(key)) {
     const album = cache.get(key);
     log.info(`[cache] memory: "${album.title}" - ${album.artist}`);
@@ -315,4 +445,4 @@ async function findAlbumLive(req) {
   return inflight.get(key);
 }
 
-module.exports = { loadAlbums, findAlbumByRawToc, findAlbumLive, lookupLive, writeDiskCache, purgeDiskCache };
+module.exports = { loadAlbums, findAlbumByRawToc, findAlbumLive, lookupLive, writeDiskCache, purgeDiskCache, setTestRecord, setTestRecordFile, isTestMode, loadTestRecordFromEnv };

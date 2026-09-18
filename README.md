@@ -51,6 +51,28 @@ npm start
 
 On Windows, run the terminal **as Administrator** (ports 53/80 are privileged on some setups); on Linux use `sudo` or `setcap`.
 
+### Test mode (fixed response)
+
+Set `GNUDB_TEST_RECORD` to answer **every** disc with the same gnudb record, without ever contacting gnudb. Only the `DISCID` line is rewritten to the disc id of the disc actually in the drive; all other fields (title, artist, year, genre, track titles) come from the file.
+
+```bash
+# bundled sample (api/samples/gnudb-sample.txt)
+GNUDB_TEST_RECORD=1 npm start
+
+# or your own raw gnudb record
+GNUDB_TEST_RECORD=./my-record.txt npm start
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:GNUDB_TEST_RECORD="1"; npm start
+```
+
+This is useful for testing the PS3 response path (TLV records, slots, XMB display) with known data. The startup log confirms it with `[test] GNUDB_TEST_RECORD active`. Unset the variable to restore normal gnudb lookups.
+
+The record file is **re-read whenever it changes on disk** (checked per request via mtime/size), so you can edit `gnudb-sample.txt` while the server runs and the next disc will use the new data - no restart needed. The reload is logged as `[test] reloaded <file>`. If the file becomes unreadable mid-session, the last good record is kept and a warning is logged.
+
 ## Docker
 
 ```bash
@@ -66,7 +88,7 @@ Notes:
 - `HOST_IP` **must** be set to the Docker host's LAN IP - inside the container the auto-detected address would be the container-internal one, which the PS3 cannot reach.
 - Ports 53 (UDP+TCP) and 80 are published on the host, so nothing else may already use them (e.g. `dnsmasq`, `systemd-resolved`, IIS). On Windows, disable the DNS Client service / anything bound to :53 if the bind fails.
 - `cache/`, `dumps/` and `logs/` are bind-mounted from the repo directory, so data survives container restarts.
-- Optional env overrides: `GNUDB_EMAIL`, `LOG_LEVEL`, `LOG_COLOR`, `DNS_PORT`, `HTTP_PORT`.
+- Optional env overrides: `GNUDB_EMAIL`, `LOG_LEVEL`, `LOG_COLOR`, `DNS_PORT`, `HTTP_PORT`, `GNUDB_TEST_RECORD` (fixed-response test mode, see [Running](#running)).
 - If `HOST_IP` is a WAN-reachable address rather than a LAN one, read [Security](#security) below first.
 
 # Setup on PS3
@@ -102,6 +124,7 @@ npm test
 api/          Node.js emulator (DNS + HTTP + gnudb client)
   src/        Source code
   test/       Jest tests
+  samples/    Sample gnudb records (test mode)
   config.json Configuration
 cache/        On-disk gnudb album cache
 dumps/        Raw request/response captures from a real PS3

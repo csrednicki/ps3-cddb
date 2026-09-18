@@ -317,7 +317,6 @@ describe('findAlbumLive - disk cache hit/miss', () => {
     fs.rmSync(CACHE_DIR, { recursive: true, force: true });
   });
   afterAll(() => { fs.rmSync(CACHE_DIR, { recursive: true, force: true }); });
-
   /**
    * A req whose rawTocHex is NOT a seed key, so findAlbumLive falls through to the disk cache.
    * @param {string} tocHex - value to use as rawTocHex (the memory-cache key)
@@ -414,5 +413,176 @@ describe('findAlbumLive - disk cache hit/miss', () => {
     // (rounded: Windows round-trips mtime through 100ns FILETIME units, which can leave
     // the ms-precision double a fraction below the exact value, e.g. ...417.999 vs ...418)
     expect(Math.round(fs.statSync(file).mtimeMs)).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe('findAlbumLive - test mode (fixed record)', () => {
+  const realParseAlbum = jest.requireActual('../src/cddb').parseAlbum;
+  const os = require('node:os');
+  // self-contained fixture - deliberately NOT api/samples/gnudb-sample.txt, so
+  // editing that sample (which the server reloads live) cannot break these tests
+  const FIXTURE = [
+    'DISCID=deadbeef',
+    'DTITLE=Fixture Artist / Fixture Album',
+    'DYEAR=1999',
+    'DGENRE=jazz',
+    'TTITLE0=First Song',
+    'TTITLE1=Second Song',
+    '',
+  ].join('\n');
+  let tmpFile;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    fs.rmSync(CACHE_DIR, { recursive: true, force: true });
+    // test mode parses the fixed record with the real parser (cddb is mocked here)
+    parseAlbum.mockImplementation(realParseAlbum);
+    tmpFile = path.join(os.tmpdir(), `ps3-cddb-test-${process.pid}-${Date.now()}.txt`);
+    albums.setTestRecord(FIXTURE);
+  });
+  afterEach(() => {
+    albums.setTestRecord(null);
+    fs.rmSync(tmpFile, { force: true });
+  });
+
+  /**
+   * Minimal req passing tocFromRequest (nTracks >= 1, leadout+track values).
+   * @param {string} tocHex - value to use as rawTocHex (the memory-cache key)
+   * @returns {object} a parsed-request-shaped object suitable for findAlbumLive
+   */
+  function liveReq(tocHex) {
+    return { rawTocHex: tocHex, toc: { nTracks: 2, values: [16000, 0, 1000, 2000] } };
+  }
+
+  it('should serve the fixed record for every disc without touching gnudb', async () => {
+    const album = await albums.findAlbumLive(liveReq('01020304'));
+    expect(album.title).toBe('Fixture Album');
+    expect(album.artist).toBe('Fixture Artist');
+    expect(album.genre).toBe('jazz');
+    expect(album.year).toBe('1999');
+    expect(album.tracks).toHaveLength(2);
+    expect(album.tracks[0].title).toBe('First Song');
+    expect(album.__fromTest).toBe(true);
+    expect(queryCddbMatches).not.toHaveBeenCalled();
+    expect(fetchCddbRecord).not.toHaveBeenCalled();
+  });
+
+  it('should answer two different discs with the same fields (record is disc-independent)', async () => {
+    const a = await albums.findAlbumLive(liveReq('aaaa0001'));
+    const b = await albums.findAlbumLive(liveReq('bbbb0002'));
+    expect(a.title).toBe(b.title);
+    expect(a.tracks.map((t) => t.title)).toEqual(b.tracks.map((t) => t.title));
+  });
+
+  it('should rewrite DISCID with the disc id derived from the inserted disc', async () => {
+    const req = liveReq('cccc0003');
+    const album = await albums.findAlbumLive(req);
+    // recompute the disc id exactly like findAlbumLive does
+    const { getDiscId } = require('../src/cddb');
+    const values = req.toc.values;
+    const frameOffsets = [150];
+    for (let i = 2; i < values.length; i++) frameOffsets.push(frameOffsets[frameOffsets.length - 1] + values[i]);
+    const expected = getDiscId(frameOffsets, req.toc.nTracks, Math.floor(values[0] / 75)).toString(16).padStart(8, '0');
+    expect(album.discId).toBe(expected);
+    expect(album.__gnudbRecord).toContain(`DISCID=${expected}`);
+    // the fixture record's own disc id must be gone
+    expect(album.__gnudbRecord).not.toContain('DISCID=deadbeef');
+  });
+
+  it('should keep the original DISCID when the request has no usable TOC', async () => {
+    const album = await albums.findAlbumLive({ rawTocHex: 'dddd0004', toc: { nTracks: 0, values: [] } });
+    expect(album.discId).toBeNull();
+    expect(album.__gnudbRecord).toContain('DISCID=deadbeef');
+  });
+
+  it('should reload a file-backed record when the file changes (live edit, no restart)', async () => {
+    fs.writeFileSync(tmpFile, FIXTURE);
+    albums.setTestRecordFile(tmpFile);
+    const first = await albums.findAlbumLive(liveReq('11110001'));
+    expect(first.title).toBe('Fixture Album');
+
+    // edit the file on disk, then insert another disc
+    fs.writeFileSync(tmpFile, FIXTURE.replace('Fixture Album', 'Edited Album!!'));
+    const second = await albums.findAlbumLive(liveReq('11110002'));
+    expect(second.title).toBe('Edited Album!!');
+    expect(require('../src/logger').info).toHaveBeenCalledWith(expect.stringContaining('[test] reloaded'));
+  });
+
+  it('should not re-read an unchanged file-backed record', async () => {
+    fs.writeFileSync(tmpFile, FIXTURE);
+    albums.setTestRecordFile(tmpFile);
+    await albums.findAlbumLive(liveReq('22220001'));
+    jest.clearAllMocks();
+    await albums.findAlbumLive(liveReq('22220002'));
+    expect(require('../src/logger').info).not.toHaveBeenCalledWith(expect.stringContaining('[test] reloaded'));
+  });
+
+  it('should keep the last good record and warn when a file-backed record becomes unreadable', async () => {
+    fs.writeFileSync(tmpFile, FIXTURE);
+    albums.setTestRecordFile(tmpFile);
+    expect((await albums.findAlbumLive(liveReq('33330001'))).title).toBe('Fixture Album');
+
+    fs.rmSync(tmpFile, { force: true });
+    const album = await albums.findAlbumLive(liveReq('33330002'));
+    expect(album.title).toBe('Fixture Album'); // last good content kept
+    expect(require('../src/logger').warn).toHaveBeenCalledWith(expect.stringContaining('keeping last good record'));
+  });
+
+  it('should report test mode via isTestMode and clear it with setTestRecord(null)', () => {
+    expect(albums.isTestMode()).toBe(true);
+    albums.setTestRecord(null);
+    expect(albums.isTestMode()).toBe(false);
+  });
+
+  it('should report test mode active for a file-backed record too', () => {
+    albums.setTestRecord(null);
+    albums.setTestRecordFile(tmpFile);
+    expect(albums.isTestMode()).toBe(true);
+    albums.setTestRecordFile(null);
+    expect(albums.isTestMode()).toBe(false);
+  });
+
+  it('should load the bundled sample when GNUDB_TEST_RECORD is a truthy flag', () => {
+    albums.setTestRecord(null);
+    process.env.GNUDB_TEST_RECORD = '1';
+    try {
+      expect(albums.loadTestRecordFromEnv()).toBe(true);
+      expect(albums.isTestMode()).toBe(true);
+    } finally {
+      delete process.env.GNUDB_TEST_RECORD;
+      albums.setTestRecord(null);
+    }
+  });
+
+  it('should load a record from an explicit path in GNUDB_TEST_RECORD', () => {
+    albums.setTestRecord(null);
+    fs.writeFileSync(tmpFile, FIXTURE);
+    process.env.GNUDB_TEST_RECORD = tmpFile;
+    try {
+      expect(albums.loadTestRecordFromEnv()).toBe(true);
+      expect(albums.isTestMode()).toBe(true);
+    } finally {
+      delete process.env.GNUDB_TEST_RECORD;
+      albums.setTestRecord(null);
+    }
+  });
+
+  it('should log an error and stay inactive when the test record file is unreadable', () => {
+    albums.setTestRecord(null);
+    process.env.GNUDB_TEST_RECORD = path.join(__dirname, 'does-not-exist.txt');
+    try {
+      expect(albums.loadTestRecordFromEnv()).toBe(false);
+      expect(albums.isTestMode()).toBe(false);
+      expect(require('../src/logger').error).toHaveBeenCalledWith(expect.stringContaining('cannot read'));
+    } finally {
+      delete process.env.GNUDB_TEST_RECORD;
+    }
+  });
+
+  it('should do nothing when GNUDB_TEST_RECORD is unset', () => {
+    albums.setTestRecord(null);
+    delete process.env.GNUDB_TEST_RECORD;
+    expect(albums.loadTestRecordFromEnv()).toBe(false);
+    expect(albums.isTestMode()).toBe(false);
   });
 });

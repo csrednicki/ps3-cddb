@@ -364,10 +364,25 @@ describe('records.buildResponse - D and G formats (genre fallback)', () => {
     }
   });
 
-  it('should encode the year in slot 22 as plain ASCII YYYY (no NUL) matching PS3 ground truth', () => {
+  it('should encode slot 22 as a full ASCII YYYY-MM-DD date (year only → YYYY-01-01, no NUL)', () => {
     const rec = albumRecord({ title: 'X', artist: 'Y', genre: 'Z', year: '1987', tracks: [{ title: 'T' }] });
     const slots = readContainer(rec);
-    // ground truth from PS3 'Send disc info' request: slot 22 = 4-byte plain ASCII year, no NUL
-    expect(slots[22].length).toBe(4);
- });
+    // firmware reads year/month/day from offsets 0/5/8, so a bare year would
+    // produce a garbage month/day - gnudb only gives us the year, so we pad it
+    expect(slots[22].toString('ascii')).toBe('1987-01-01');
+    expect(slots[22].includes(0)).toBe(false);
+  });
+
+  it('should preserve an explicit month/day when the album already carries a full date', () => {
+    const rec = albumRecord({ title: 'X', artist: 'Y', genre: 'Z', year: '1987-05-12', tracks: [{ title: 'T' }] });
+    const slots = readContainer(rec);
+    expect(slots[22].toString('ascii')).toBe('1987-05-12');
+  });
+
+  it('should leave slot 22 absent when there is no usable year', () => {
+    for (const year of [undefined, '', 'unknown', 0]) {
+      const rec = albumRecord({ title: 'X', artist: 'Y', genre: 'Z', year, tracks: [{ title: 'T' }] });
+      expect(readContainer(rec)[22].length).toBe(0);
+    }
+  });
 });

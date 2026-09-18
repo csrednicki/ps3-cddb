@@ -16,6 +16,7 @@ RUN npm ci --omit=dev
 
 # application code + default config
 COPY api/src api/src
+COPY api/samples api/samples
 COPY api/config.json api/config.json
 
 # writable runtime dirs (mount volumes over them to persist data)
