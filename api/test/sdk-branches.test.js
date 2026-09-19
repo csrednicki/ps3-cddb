@@ -1,67 +1,23 @@
 'use strict';
 
 /**
- * Coverage of missing sdk branches - records.js (buildResponse with formats),
+ * Coverage of missing sdk branches - records.js (buildResponse with candidates),
  * tlv.js (readRecords/readContainer - errors), toc.js (tocFieldSize, encodeValue
  * edge), checksum.js (integritySize, appendIntegrity default).
  */
-
 const { TAGS, writeRecord, readRecords, writeContainer, readContainer, writeStr, writeI16, writeI32 } = require('../src/tlv');
 const { buildResponse, trackRecord, errorRecord, albumRecord } = require('../src/records');
 const { tocFieldSize, encodedSize, encodeValue, decodeTocField } = require('../src/toc');
 
-describe('records.buildResponse - RESPONSE_FORMAT formats', () => {
+describe('records.buildResponse - ALBUM records', () => {
   const album = {
     title: 'Sample Sounds', artist: 'Test Artist', genre: 'Pop',
     tracks: [{ title: 'Sample Sounds' }, { title: 'Closing Track' }],
   };
 
-  /**
-   * Runs `fn` with RESPONSE_FORMAT set to `fmt`, restoring the previous value afterward.
-   * @param {string} fmt - value to set RESPONSE_FORMAT to for the duration of `fn`
-   * @param {() => *} fn - callback to run under that format
-   * @returns {*} fn()'s return value
-   */
-  const withFormat = (fmt, fn) => {
-    const prev = process.env.RESPONSE_FORMAT;
-    process.env.RESPONSE_FORMAT = fmt;
-    try { return fn(); } finally {
-      if (prev === undefined) delete process.env.RESPONSE_FORMAT;
-      else process.env.RESPONSE_FORMAT = prev;
-    }
-  };
-
-  it('should emit D,T,T,G,A records in RESPONSE_FORMAT order for a 2-track album', () => {
-    withFormat('D,T,G,A', () => {
-      const tags = readRecords(buildResponse({ album })).map((r) => r.tag);
-      // the album has 2 tracks → 2 T records
-      expect(tags).toEqual([TAGS.DISC, TAGS.TRACK, TAGS.TRACK, TAGS.GENRE, TAGS.ALBUM]);
-    });
-  });
-
-  it('should fall back to record A when RESPONSE_FORMAT is empty', () => {
-    withFormat('', () => {
-      const tags = readRecords(buildResponse({ album })).map((r) => r.tag);
-      expect(tags).toEqual([TAGS.ALBUM]);
-    });
-  });
-
-  it('should ignore unknown tags in RESPONSE_FORMAT and fall back to A', () => {
-    withFormat('XYZ', () => {
-      const tags = readRecords(buildResponse({ album })).map((r) => r.tag);
-      expect(tags).toEqual([TAGS.ALBUM]);
-    });
-  });
-
-  it('should not emit T records when the album has no tracks', () => {
-    withFormat('A,T', () => {
-      const tags = readRecords(buildResponse({ album: { title: 'Empty', tracks: [] } })).map((r) => r.tag);
-      expect(tags).toEqual([TAGS.ALBUM]);
-    });
-  });
-
-  it('should return an empty buffer when neither error nor album is given', () => {
-    expect(buildResponse({}).length).toBe(0);
+  it('should emit exactly one ALBUM record for a single album', () => {
+    const tags = readRecords(buildResponse({ album })).map((r) => r.tag);
+    expect(tags).toEqual([TAGS.ALBUM]);
   });
 
   it('should emit one ALBUM record per candidate when album.candidates has several matches', () => {
@@ -70,20 +26,32 @@ describe('records.buildResponse - RESPONSE_FORMAT formats', () => {
       { title: 'Sample Sounds (Special Edition)', artist: 'Test Artist', genre: 'Pop', tracks: [{ title: 'Sample Sounds' }] },
       { title: 'Sample Sounds (Remastered)', artist: 'Test Artist', genre: 'Pop', tracks: [{ title: 'Sample Sounds' }] },
     ];
-    withFormat('A', () => {
-      const resp = buildResponse({ album: { ...candidates[0], candidates } });
-      const recs = readRecords(resp);
-      expect(recs.map((r) => r.tag)).toEqual([TAGS.ALBUM, TAGS.ALBUM, TAGS.ALBUM]);
-      const titles = recs.map((r) => readContainer(r.payload)[1].toString('utf8').replace(/\0$/, ''));
-      expect(titles).toEqual(candidates.map((c) => c.title));
-    });
+    const resp = buildResponse({ album: { ...candidates[0], candidates } });
+    const recs = readRecords(resp);
+    expect(recs.map((r) => r.tag)).toEqual([TAGS.ALBUM, TAGS.ALBUM, TAGS.ALBUM]);
+    const titles = recs.map((r) => readContainer(r.payload)[1].toString('utf8').replace(/\0$/, ''));
+    expect(titles).toEqual(candidates.map((c) => c.title));
   });
 
-  it('should emit a single ALBUM record when album.candidates is absent or has only one entry', () => {
-    withFormat('A', () => {
-      expect(readRecords(buildResponse({ album: { ...album, candidates: [album] } })).map((r) => r.tag))
-        .toEqual([TAGS.ALBUM]);
-    });
+  it('should cap candidates at 10 ALBUM records', () => {
+    const candidates = Array.from({ length: 25 }, (_, i) => ({
+      title: `Cand ${i}`, artist: 'A', genre: 'G', tracks: [{ title: 'T' }],
+    }));
+    const recs = readRecords(buildResponse({ album: { ...candidates[0], candidates } }));
+    expect(recs).toHaveLength(10);
+    expect(recs.every((r) => r.tag === TAGS.ALBUM)).toBe(true);
+  });
+
+  it('should emit a single ALBUM record when album.candidates has only one entry', () => {
+    expect(readRecords(buildResponse({ album: { ...album, candidates: [album] } })).map((r) => r.tag))
+      .toEqual([TAGS.ALBUM]);
+  });
+
+  it('should emit a single E record (not an empty body) when there is no album', () => {
+    const resp = buildResponse({});
+    const recs = readRecords(resp);
+    expect(recs.map((r) => r.tag)).toEqual([TAGS.ERROR]);
+    expect(readContainer(recs[0].payload)[0].readUInt32LE(0)).toBe(0);
   });
 
   it('should build the error record as a 2-field container [i32 code, string message]', () => {
@@ -210,12 +178,14 @@ describe('toc - tocFieldSize, encodedSize, encodeValue', () => {
 });
 
 describe('records.albumRecord - fallback branches', () => {
-  it('should leave artist/title/genre slots as empty strings when they are missing', () => {
+  it('should leave title/artist/genre slots ABSENT (0 bytes) when they are missing', () => {
     const rec = albumRecord({ tracks: [{ title: 'T' }] });
     const slots = readContainer(rec);
-    expect(slots[1].toString('utf8').replace(/\0/g, '')).toBe('');
-    expect(slots[4].toString('utf8').replace(/\0/g, '')).toBe('');
-    expect(slots[9].toString('utf8').replace(/\0/g, '')).toBe('');
+    // absent (length 0) rather than a lone NUL: an absent artist makes the
+    // firmware fall back to "various artist", a NUL would be an empty artist
+    expect(slots[1].length).toBe(0);
+    expect(slots[4].length).toBe(0);
+    expect(slots[9].length).toBe(0);
   });
 
   it('should fall back to genres[0].main for the genre slot when album.genre is missing', () => {
@@ -230,7 +200,7 @@ describe('records.albumRecord - fallback branches', () => {
     const slots = readContainer(rec);
     expect(slots[6].readUInt16LE(0)).toBe(99);
     const group = readContainer(readContainer(slots[15])[0]);
-    expect(group[2].readUInt16LE(0)).toBe(99);
+    expect(readContainer(group[0]).length).toBe(99); // track list clipped too
   });
 
   it('should produce trackCount=0 without crashing when album.tracks is undefined', () => {
@@ -238,61 +208,236 @@ describe('records.albumRecord - fallback branches', () => {
     const slots = readContainer(rec);
     expect(slots[6].readUInt16LE(0)).toBe(0);
   });
+
+  it('should put the disc length in group element 2 (0 when unknown) and leave track slot 3 absent', () => {
+    const rec = albumRecord({ title: 'X', artist: 'Y', genre: 'Z', tracks: [{ title: 'T' }] });
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(group[2].length).toBe(2);           // always a 2-byte number
+    expect(group[2].readUInt16LE(0)).toBe(0);  // unknown disc length -> 0
+    expect(slots[23].length).toBe(0);          // unknown album length -> absent
+    const track = readContainer(readContainer(group[0])[0]);
+    expect(track[3].length).toBe(0);           // unknown track length -> absent
+  });
+
+  it('should fill the duration slots when the album carries track lengths', () => {
+    const rec = albumRecord({
+      title: 'X', artist: 'Y', genre: 'Z',
+      tracks: [{ title: 'T1', duration: 100 }, { title: 'T2', duration: 200 }],
+    });
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(group[2].readUInt16LE(0)).toBe(300); // summed disc length
+    expect(slots[23].readUInt16LE(0)).toBe(300); // album length
+    const track = readContainer(readContainer(group[0])[0]);
+    expect(track[3].readUInt16LE(0)).toBe(100);
+  });
+
+  it('should prefer album.totalDuration over the summed track lengths', () => {
+    const rec = albumRecord({
+      title: 'X', artist: 'Y', genre: 'Z', totalDuration: 999,
+      tracks: [{ title: 'T1', duration: 100 }],
+    });
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(group[2].readUInt16LE(0)).toBe(999);
+    expect(slots[23].readUInt16LE(0)).toBe(999);
+  });
+
+  it('should clamp duration slots to 65535', () => {
+    const rec = albumRecord({ title: 'X', artist: 'Y', genre: 'Z', tracks: [{ title: 'T', duration: 999999 }] });
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(group[2].readUInt16LE(0)).toBe(65535);
+  });
 });
 
-describe('records.buildResponse - D and G formats (genre fallback)', () => {
-  it('should emit a D record with the title and an empty G record for an album without genre', () => {
-    const prev = process.env.RESPONSE_FORMAT;
-    process.env.RESPONSE_FORMAT = 'D,G';
-    try {
-      const recs = readRecords(buildResponse({ album: { title: 'X', tracks: [] } }));
-      expect(recs.map((r) => r.tag)).toEqual([TAGS.DISC, TAGS.GENRE]);
-      const gFields = readContainer(recs[1].payload);
-      expect(gFields[0].length).toBe(1); // single NUL (empty genre)
-    } finally {
-      if (prev === undefined) delete process.env.RESPONSE_FORMAT;
-      else process.env.RESPONSE_FORMAT = prev;
-    }
+describe('records.albumRecord - compilation flag (slot 3 = "VA")', () => {
+  it('should set slot 3 to "VA" when the album artist is "various ..."', () => {
+    const rec = albumRecord({ title: 'X', artist: 'Various Artists', genre: 'Z', tracks: [{ title: 'T' }] });
+    const slots = readContainer(rec);
+    expect(slots[3].toString('utf8')).toBe('VA\0');
   });
 
-  it('should emit an empty D record when the album has no title', () => {
-    const prev = process.env.RESPONSE_FORMAT;
-    process.env.RESPONSE_FORMAT = 'D';
-    try {
-      const recs = readRecords(buildResponse({ album: { tracks: [] } }));
-      const dFields = readContainer(recs[0].payload);
-      expect(dFields[0].length).toBe(1); // single NUL (empty title)
-    } finally {
-      if (prev === undefined) delete process.env.RESPONSE_FORMAT;
-      else process.env.RESPONSE_FORMAT = prev;
-    }
+  it('should set slot 3 to "VA" when at least half of ALL tracks credit a different artist', () => {
+    const rec = albumRecord({
+      title: 'X', artist: 'Album Artist', genre: 'Z',
+      tracks: [
+        { title: 'T1', artist: 'Guest One' },
+        { title: 'T2', artist: 'Guest Two' },
+        { title: 'T3' },
+        { title: 'T4' },
+      ],
+    });
+    const slots = readContainer(rec);
+    expect(slots[3].toString('utf8')).toBe('VA\0');
   });
 
-  it('should fall back to genres[0].main in the G record when album.genre is missing', () => {
-    const prev = process.env.RESPONSE_FORMAT;
-    process.env.RESPONSE_FORMAT = 'G';
-    try {
-      const recs = readRecords(buildResponse({ album: { title: 'X', genres: [{ main: 'Pop' }] } }));
-      const gFields = readContainer(recs[0].payload);
-      expect(gFields[0].toString('utf8').replace(/\0/g, '')).toBe('Pop');
-    } finally {
-      if (prev === undefined) delete process.env.RESPONSE_FORMAT;
-      else process.env.RESPONSE_FORMAT = prev;
-    }
+  it('should NOT flag an album with a single duet track (Queen & David Bowie case)', () => {
+    const rec = albumRecord({
+      title: 'X', artist: 'Queen', genre: 'Z',
+      tracks: [
+        { title: 'T1', artist: 'Queen & David Bowie' },
+        { title: 'T2' },
+        { title: 'T3' },
+        { title: 'T4' },
+      ],
+    });
+    const slots = readContainer(rec);
+    expect(slots[3].length).toBe(0);
   });
 
-  it('should not emit any records for format T when the album has no tracks', () => {
-    const prev = process.env.RESPONSE_FORMAT;
-    process.env.RESPONSE_FORMAT = 'T';
-    try {
-      const recs = readRecords(buildResponse({ album: { title: 'X' } }));
-      expect(recs).toHaveLength(0); // no tracks → 0 T records (and no others)
-    } finally {
-      if (prev === undefined) delete process.env.RESPONSE_FORMAT;
-      else process.env.RESPONSE_FORMAT = prev;
-    }
+  it('should compare artists case- and whitespace-insensitively', () => {
+    const rec = albumRecord({
+      title: 'X', artist: 'The  Beatles', genre: 'Z',
+      tracks: [
+        { title: 'T1', artist: 'the beatles' },
+        { title: 'T2', artist: 'THE BEATLES' },
+      ],
+    });
+    const slots = readContainer(rec);
+    expect(slots[3].length).toBe(0); // same artist, different casing -> not a compilation
   });
 
+  it('should leave slot 3 absent when no track credits an artist', () => {
+    const rec = albumRecord({ title: 'X', artist: 'Album Artist', genre: 'Z', tracks: [{ title: 'T1' }, { title: 'T2' }] });
+    const slots = readContainer(rec);
+    expect(slots[3].length).toBe(0);
+  });
+
+  it('should leave slot 3 absent when every track credits the album artist', () => {
+    const rec = albumRecord({
+      title: 'X', artist: 'Album Artist', genre: 'Z',
+      tracks: [{ title: 'T1', artist: 'Album Artist' }, { title: 'T2', artist: 'Album Artist' }],
+    });
+    const slots = readContainer(rec);
+    expect(slots[3].length).toBe(0);
+  });
+});
+
+describe('records.albumRecord - TOC alignment and durations', () => {
+  const mk = (n, len) => Array.from({ length: n }, (_, i) => ({ title: `T${i}`, frames: len }));
+
+  it('should truncate the track list to the audio track count when a TOC is given', () => {
+    const tracks = Array.from({ length: 15 }, (_, i) => ({ title: `T${i}` }));
+    const rec = albumRecord({ title: 'X', artist: 'Y', genre: 'Z', tracks }, { audioTrackCount: 11 });
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(readContainer(group[0])).toHaveLength(11);
+    expect(slots[6].readUInt16LE(0)).toBe(11);
+  });
+
+  it('should drop a leading data track when the lengths match one position in', () => {
+    // gnudb lists a 3-frame data track first, then the two audio tracks
+    const rec = albumRecord(
+      { title: 'X', artist: 'Y', genre: 'Z', frameOffsets: [0, 3, 3003, 6003], leadout: 9003, tracks: [{ title: 'Data' }, { title: 'A' }, { title: 'B' }] },
+      { audioTrackCount: 2, trackLengths: [3000, 3000] },
+    );
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    const list = readContainer(group[0]);
+    expect(list).toHaveLength(2);
+    expect(readContainer(list[0])[1].toString('utf8').replace(/\0/g, '')).toBe('A'); // "Data" dropped
+  });
+
+  it('should not drop a track when the lengths already align at 0', () => {
+    const rec = albumRecord(
+      { title: 'X', artist: 'Y', genre: 'Z', frameOffsets: [150, 3150, 6150], leadout: 9150, tracks: [{ title: 'A' }, { title: 'B' }] },
+      { audioTrackCount: 2, trackLengths: [3000, 3000] },
+    );
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    const list = readContainer(group[0]);
+    expect(readContainer(list[0])[1].toString('utf8').replace(/\0/g, '')).toBe('A');
+  });
+
+  it('should fill duration slots from the gnudb track lengths (frames / 75)', () => {
+    const rec = albumRecord(
+      { title: 'X', artist: 'Y', genre: 'Z', frameOffsets: [150, 7650, 15150], leadout: 22650, tracks: [{ title: 'A' }, { title: 'B' }] },
+    );
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    // 7500/75 = 100 and 7500/75 = 100
+    expect(readContainer(readContainer(group[0])[0])[3].readUInt16LE(0)).toBe(100);
+    expect(group[2].readUInt16LE(0)).toBe(200);
+    expect(slots[23].readUInt16LE(0)).toBe(200);
+  });
+
+  it('should fall back to the TOC lengths when gnudb has no offsets', () => {
+    const rec = albumRecord(
+      { title: 'X', artist: 'Y', genre: 'Z', tracks: [{ title: 'A' }, { title: 'B' }] },
+      { audioTrackCount: 2, trackLengths: [1500, 3000] },
+    );
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(readContainer(readContainer(group[0])[0])[3].readUInt16LE(0)).toBe(20); // 1500/75
+    expect(group[2].readUInt16LE(0)).toBe(60); // 20 + 40
+  });
+
+  it('should leave durations absent when neither gnudb nor the TOC provide lengths', () => {
+    const rec = albumRecord({ title: 'X', artist: 'Y', genre: 'Z', tracks: [{ title: 'A' }] });
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(readContainer(readContainer(group[0])[0])[3].length).toBe(0);
+    expect(group[2].readUInt16LE(0)).toBe(0);
+    expect(slots[23].length).toBe(0);
+  });
+
+  it('should ignore gnudb offsets with no usable leadout', () => {
+    const rec = albumRecord({
+      title: 'X', artist: 'Y', genre: 'Z', frameOffsets: [150, 3150], leadout: null,
+      tracks: [{ title: 'A' }],
+    });
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(readContainer(readContainer(group[0])[0])[3].length).toBe(0);
+  });
+
+  it('should ignore a TOC with no usable audio track count', () => {
+    const rec = albumRecord(
+      { title: 'X', artist: 'Y', genre: 'Z', tracks: [{ title: 'A' }, { title: 'B' }] },
+      { audioTrackCount: 0 },
+    );
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(readContainer(group[0])).toHaveLength(2);
+  });
+
+  it('should ignore an empty TOC trackLengths array', () => {
+    const rec = albumRecord(
+      { title: 'X', artist: 'Y', genre: 'Z', tracks: [{ title: 'A' }] },
+      { audioTrackCount: 1, trackLengths: [] },
+    );
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(readContainer(readContainer(group[0])[0])[3].length).toBe(0);
+  });
+
+  it('should return 0 from the alignment search when no window matches', () => {
+    // gnudb lengths [3, 3000] vs a disc whose first track is 5000 frames: no match
+    const rec = albumRecord(
+      { title: 'X', artist: 'Y', genre: 'Z', frameOffsets: [0, 3, 3003], leadout: 6003, tracks: [{ title: 'Data' }, { title: 'A' }] },
+      { audioTrackCount: 1, trackLengths: [5000] },
+    );
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    const list = readContainer(group[0]);
+    expect(readContainer(list[0])[1].toString('utf8').replace(/\0/g, '')).toBe('Data'); // k = 0
+  });
+
+  it('should not shift a single-audio-track disc (nothing to compare)', () => {
+    const rec = albumRecord(
+      { title: 'X', artist: 'Y', genre: 'Z', frameOffsets: [0, 3, 3003], leadout: 6003, tracks: [{ title: 'Data' }, { title: 'Only' }] },
+      { audioTrackCount: 1, trackLengths: [3000] },
+    );
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    const list = readContainer(group[0]);
+    expect(readContainer(list[0])[1].toString('utf8').replace(/\0/g, '')).toBe('Data');
+  });
+});
+
+describe('records.buildResponse - error records and slot 22 date', () => {
   it('should emit an E record when an error is given', () => {
     const recs = readRecords(buildResponse({ error: { code: 0x23, message: 'x' } }));
     expect(recs.map((r) => r.tag)).toEqual([TAGS.ERROR]);
@@ -306,77 +451,24 @@ describe('records.buildResponse - D and G formats (genre fallback)', () => {
     expect(fields[1][0]).toBe(0);
   });
 
-  it('should produce an empty genre when album.genre is an empty string and genres is undefined', () => {
-    const prev = process.env.RESPONSE_FORMAT;
-    process.env.RESPONSE_FORMAT = 'G';
-    try {
-      const recs = readRecords(buildResponse({ album: { title: 'X', genre: '', genres: undefined } }));
-      const gFields = readContainer(recs[0].payload);
-      expect(gFields[0].length).toBe(1);
-      expect(gFields[0][0]).toBe(0);
-    } finally {
-      if (prev === undefined) delete process.env.RESPONSE_FORMAT;
-      else process.env.RESPONSE_FORMAT = prev;
-    }
+  it('should emit an E record with code 0 when called without arguments', () => {
+    const recs = readRecords(buildResponse());
+    expect(recs.map((r) => r.tag)).toEqual([TAGS.ERROR]);
+    expect(readContainer(recs[0].payload)[0].readUInt32LE(0)).toBe(0);
   });
 
-  it('should produce an empty genre when genres is an empty array', () => {
-    const prev = process.env.RESPONSE_FORMAT;
-    process.env.RESPONSE_FORMAT = 'G';
-    try {
-      const recs = readRecords(buildResponse({ album: { title: 'X', genre: undefined, genres: [] } }));
-      const gFields = readContainer(recs[0].payload);
-      expect(gFields[0].length).toBe(1);
-      expect(gFields[0][0]).toBe(0);
-    } finally {
-      if (prev === undefined) delete process.env.RESPONSE_FORMAT;
-      else process.env.RESPONSE_FORMAT = prev;
-    }
-  });
-
-  it('should return an empty buffer when called without arguments', () => {
-    expect(buildResponse().length).toBe(0);
-  });
-
-  it('should produce an empty genre when a genres entry has no main field', () => {
-    const prev = process.env.RESPONSE_FORMAT;
-    process.env.RESPONSE_FORMAT = 'G';
-    try {
-      const recs = readRecords(buildResponse({ album: { title: 'X', genre: undefined, genres: [{}] } }));
-      const gFields = readContainer(recs[0].payload);
-      expect(gFields[0].length).toBe(1);
-      expect(gFields[0][0]).toBe(0);
-    } finally {
-      if (prev === undefined) delete process.env.RESPONSE_FORMAT;
-      else process.env.RESPONSE_FORMAT = prev;
-    }
-  });
-
-  it('should fall back to record A when RESPONSE_FORMAT is not set', () => {
-    const prev = process.env.RESPONSE_FORMAT;
-    delete process.env.RESPONSE_FORMAT;
-    try {
-      const tags = readRecords(buildResponse({ album: { title: 'X', tracks: [] } })).map((r) => r.tag);
-      expect(tags).toEqual([TAGS.ALBUM]);
-    } finally {
-      if (prev === undefined) delete process.env.RESPONSE_FORMAT;
-      else process.env.RESPONSE_FORMAT = prev;
-    }
-  });
-
-  it('should encode slot 22 as a full ASCII YYYY-MM-DD date (year only → YYYY-01-01, no NUL)', () => {
+  it('should encode slot 22 as a NUL-terminated ASCII YYYY-MM-DD date (year only → YYYY-01-01)', () => {
     const rec = albumRecord({ title: 'X', artist: 'Y', genre: 'Z', year: '1987', tracks: [{ title: 'T' }] });
     const slots = readContainer(rec);
     // firmware reads year/month/day from offsets 0/5/8, so a bare year would
     // produce a garbage month/day - gnudb only gives us the year, so we pad it
-    expect(slots[22].toString('ascii')).toBe('1987-01-01');
-    expect(slots[22].includes(0)).toBe(false);
+    expect(slots[22].toString('ascii')).toBe('1987-01-01\0');
   });
 
   it('should preserve an explicit month/day when the album already carries a full date', () => {
     const rec = albumRecord({ title: 'X', artist: 'Y', genre: 'Z', year: '1987-05-12', tracks: [{ title: 'T' }] });
     const slots = readContainer(rec);
-    expect(slots[22].toString('ascii')).toBe('1987-05-12');
+    expect(slots[22].toString('ascii')).toBe('1987-05-12\0');
   });
 
   it('should leave slot 22 absent when there is no usable year', () => {

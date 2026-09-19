@@ -143,17 +143,41 @@ function parseMatches(reply) {
  * Parses a gnudb "read" record's DTITLE/DYEAR/DGENRE/TTITLE lines into an album.
  * A TTITLE may carry a per-track artist as "Artist / Title" (the same separator
  * as DTITLE); when present it is split out into the track's `artist`.
+ *
+ * For a "Various / Album" disc the freedb convention is
+ * `TTITLEn=Artist / Title`, so the split is done on the FIRST "/" (tolerating
+ * missing spaces) to match the convention; otherwise the stricter " / "
+ * separator is required, so a title like "AC/DC" is not mistaken for an artist.
+ *
+ * The record's `# Track frame offsets:` and `# Leadout:` comments are parsed
+ * into `albumFrameOffsets` / `albumLeadout` (frames) so the server can align
+ * tracks with the physical disc without relying on request offsets.
  * @param {string} text - raw gnudb record text
  * @param {number} [maxTracks=99] - highest TTITLE index to accept (out-of-range indices are ignored)
- * @returns {{albumArtist: string, albumTitle: string, albumGenre: string, albumYear: string, albumDiscId: string, albumDisc: number, tracks: Array<{title: string, artist: string}>}}
+ * @returns {{albumArtist: string, albumTitle: string, albumGenre: string, albumYear: string, albumDiscId: string, albumDisc: number, albumFrameOffsets: number[], albumLeadout: number|null, tracks: Array<{title: string, artist: string}>}}
  */
 function parseAlbum(text, maxTracks = 99) {
-  const album = { albumArtist: '', albumTitle: '', albumGenre: '', albumYear: '', albumDiscId: '', albumDisc: 0, tracks: [] };
+  const album = {
+    albumArtist: '', albumTitle: '', albumGenre: '', albumYear: '', albumDiscId: '',
+    albumDisc: 0, albumFrameOffsets: [], albumLeadout: null, tracks: [],
+  };
   const titles = new Array(maxTracks).fill('');
   let highest = -1;
+  let inOffsets = false;
 
   for (const rawLine of String(text).split(/\r?\n/)) {
     const line = rawLine;
+    if (line.startsWith('# Track frame offsets:')) { inOffsets = true; continue; }
+    if (inOffsets) {
+      const om = line.match(/^#\s+(\d+)\s*$/);
+      if (om) { album.albumFrameOffsets.push(parseInt(om[1], 10)); continue; }
+      inOffsets = false;
+    }
+    if (line.startsWith('#')) {
+      const lm = line.match(/^#\s*Leadout:\s*(\d+)/);
+      if (lm) album.albumLeadout = parseInt(lm[1], 10);
+      continue;
+    }
     if (line.startsWith('DTITLE=') && !album.albumTitle) {
       const value = line.slice(7);
       const sep = value.indexOf(' / ');
@@ -181,14 +205,20 @@ function parseAlbum(text, maxTracks = 99) {
     }
   }
 
+  // "Various / Album" discs carry the per-track artist in each TTITLE, split on
+  // the first "/" per freedb convention. The space-separated " / " is preferred
+  // when present, so an artist containing "/" (e.g. "AC/DC") is not truncated.
+  const various = /^various/i.test(album.albumArtist.trim());
   const n = highest + 1;
   for (let i = 0; i < n; i++) {
     const raw = titles[i] || '';
-    const sep = raw.indexOf(' / ');
+    const spaced = raw.indexOf(' / ');
+    const sep = various ? (spaced !== -1 ? spaced : raw.indexOf('/')) : spaced;
+    const delim = sep !== -1 && raw[sep] === ' ' ? 3 : 1;
     // per-track artist ("Artist / Title") when present, otherwise empty and the
     // album artist is used as the fallback by the record builder
-    const artist = sep !== -1 ? raw.slice(0, sep) : '';
-    const title = sep !== -1 ? raw.slice(sep + 3) : raw;
+    const artist = sep !== -1 ? raw.slice(0, sep).trim() : '';
+    const title = sep !== -1 ? raw.slice(sep + delim).trim() : raw;
     album.tracks.push({ title, artist });
   }
   album.albumArtist = album.albumArtist.trim();

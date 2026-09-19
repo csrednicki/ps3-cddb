@@ -264,6 +264,54 @@ describe('parseAlbum', () => {
     expect(rec.tracks.length).toBe(1); // only index 0 < 3
   });
 
+  it('should split TTITLE on the first "/" for a Various album (freedb convention)', () => {
+    const rec = parseAlbum('DTITLE=Various / Hits\nTTITLE0=Queen/David Bowie - Under Pressure\nTTITLE1=Simple Artist / Song\n');
+    expect(rec.tracks).toEqual([
+      { title: 'David Bowie - Under Pressure', artist: 'Queen' },
+      { title: 'Song', artist: 'Simple Artist' },
+    ]);
+  });
+
+  it('should split a per-track artist containing "/" at the space-separated separator for a Various album', () => {
+    // "AC/DC / Back in Black": the " / " separator is preferred over the first "/"
+    const rec = parseAlbum('DTITLE=Various Artists / Hits\nTTITLE0=AC/DC / Back in Black\n');
+    expect(rec.tracks).toEqual([{ title: 'Back in Black', artist: 'AC/DC' }]);
+  });
+
+  it('should require the " / " separator for a non-Various album (so "AC/DC" stays a title)', () => {
+    const rec = parseAlbum('DTITLE=AC/DC / Back in Black\nTTITLE0=Hells Bells\n');
+    expect(rec.tracks).toEqual([{ title: 'Hells Bells', artist: '' }]);
+  });
+
+  it('should parse the "# Track frame offsets:" and "# Leadout:" comments', () => {
+    const rec = parseAlbum([
+      '# Track frame offsets:',
+      '#     150',
+      '#     8333',
+      '#     25066',
+      '#',
+      '# Disc length: 3003 seconds',
+      '# Leadout: 225171',
+      '#',
+      'DTITLE=A / B',
+      'TTITLE0=T',
+    ].join('\n'));
+    expect(rec.albumFrameOffsets).toEqual([150, 8333, 25066]);
+    expect(rec.albumLeadout).toBe(225171);
+  });
+
+  it('should leave frame offsets empty and leadout null when the comments are absent', () => {
+    const rec = parseAlbum('DTITLE=A / B\nTTITLE0=T\n');
+    expect(rec.albumFrameOffsets).toEqual([]);
+    expect(rec.albumLeadout).toBeNull();
+  });
+
+  it('should not pick up unrelated "#" comment lines as offsets or leadout', () => {
+    const rec = parseAlbum('# xmcd\n#\n# Revision: 0\n# Artid: abc\n# Cover: https://x/1\nDTITLE=A / B\n');
+    expect(rec.albumFrameOffsets).toEqual([]);
+    expect(rec.albumLeadout).toBeNull();
+  });
+
   it('should parse DISCID into albumDiscId and keep only the first occurrence', () => {
     const rec = parseAlbum('DISCID=b40bb90f\nDISCID=deadbeef\nDTITLE=A / B\n');
     expect(rec.albumDiscId).toBe('b40bb90f');

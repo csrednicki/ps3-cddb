@@ -142,13 +142,24 @@ main{text-align:center}h1{color:#7fd4ff}code{background:#222;padding:2px 6px;bor
         log.info(`[sdk] type=${parsed.type} mac=${entry.mac} user="${parsed.header.user.toString('latin1').replace(/\0.*$/, '')}" selectors=${parsed.header.integritySelector}/${parsed.header.transformSelector}`);
 
         findAlbumLive(parsed).then((album) => {
+          // Pass the decoded TOC so the track list can be aligned with the disc
+          // in the drive: the audio track count truncates the list and the
+          // per-track lengths (frames, decoded values after leadout+START) are
+          // matched against gnudb's own offsets to skip a leading data track
+          // (see records.alignOffset).
+          const tocInfo = parsed.toc
+            ? {
+              audioTrackCount: parsed.toc.nTracks,
+              trackLengths: parsed.toc.values.slice(2, 2 + parsed.toc.nTracks),
+            }
+            : null;
           const response = album
-            ? buildResponse({ album })
+            ? buildResponse({ album, toc: tocInfo })
             : buildResponse({ error: { code: 0x23, message: 'album not found' } });
           const candidateInfo = album?.candidates?.length > 1 ? `, +${album.candidates.length - 1} more candidate(s)` : '';
           const matchInfo = album ? `MATCH: "${album.title}" - ${album.artist} (${album.tracks?.length ?? 0} tracks), year: ${album.year || 'unknown'}${candidateInfo}` : 'NO MATCH → error 0x23 (TOC view)';
 
-          log.info(`[sdk] rawToc=${parsed.rawTocHex.slice(0, 24)}… → ${matchInfo} [fmt=${process.env.RESPONSE_FORMAT ?? 'A'}]`);
+          log.info(`[sdk] rawToc=${parsed.rawTocHex.slice(0, 24)}… → ${matchInfo}`);
           const ts = Date.now();
           if (cfg.dumps.logResponses) log.dumpBinary(`resp_${ts}`, response);
           // pair the raw gnudb record with the response dump (same timestamp):

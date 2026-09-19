@@ -287,6 +287,8 @@ async function fetchCandidate(match, toc) {
     numDiscs,
     discNumber: album.albumDisc || 1, // disc number within the set (from DTITLE heuristic)
     tracks: album.tracks,
+    frameOffsets: album.albumFrameOffsets, // gnudb "# Track frame offsets:" (frames)
+    leadout: album.albumLeadout, // gnudb "# Leadout:" (frames)
     __gnudbRecord: record, // raw gnudb text - saved next to the response dump
   };
 }
@@ -374,6 +376,8 @@ async function findAlbumLive(req) {
       numDiscs: Math.max(1, album.albumDisc || 1),
       discNumber: album.albumDisc || 1,
       tracks: album.tracks,
+      frameOffsets: album.albumFrameOffsets,
+      leadout: album.albumLeadout,
       __gnudbRecord: served,
       __fromTest: true,
       discId,
@@ -408,6 +412,8 @@ async function findAlbumLive(req) {
       genre: album.albumGenre,
       year: album.albumYear || '',
       numDiscs: Math.max(1, album.albumDisc || 1),
+      frameOffsets: album.albumFrameOffsets,
+      leadout: album.albumLeadout,
       discNumber: album.albumDisc || 1,
       tracks: album.tracks,
       __gnudbRecord: hit.record,

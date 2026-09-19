@@ -30,7 +30,7 @@
 # Artid: 62b7cd8d-ff04-4e8b-a615-6fab903535bd
 #
 DISCID=b40bb90f
-DTITLE=Bla bla / This is test album data!
+DTITLE=Various Artists / This is test album data!
 DYEAR=2033-12-13
 DGENRE=dance
 # --- test track titles: one per typical title form --------------------------

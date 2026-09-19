@@ -105,6 +105,14 @@ describe('Sample album disc match (raw TOC from the fixture packet)', () => {
     expect(slots[10].length).toBe(0); // slot 10 = ABSENT (hard-lock when text!)
   });
 
+  it('should align the seed album tracks to the disc audio track count when a TOC is given', () => {
+    const album = findAlbumByRawToc(RAW_TOC_HEX);
+    const resp = buildResponse({ album, toc: { audioTrackCount: 11, start: 150 } });
+    const slots = readContainer(readRecords(resp)[0].payload);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(readContainer(group[0])).toHaveLength(11); // matches the physical disc
+  });
+
   it('should emit an E record with code 0x23 when no album matches', () => {
     const resp = buildResponse({ error: { code: 0x23, message: 'album not found' } });
     const records = readRecords(resp);
