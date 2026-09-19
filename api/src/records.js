@@ -187,12 +187,14 @@ function albumRecord(album, toc) {
   const albumGenre = album.genre ?? album.genres?.[0]?.main ?? '';
   const compilation = isCompilation(albumArtist, tracks);
 
-  // Resolve each track's duration (seconds) before encoding: gnudb's own track
-  // length (after the alignment shift), else the TOC length, else the album
-  // data's own duration.
+  // Resolve each track's duration (seconds) before encoding. The request TOC
+  // describes the disc physically in the drive, so it wins over gnudb (which may
+  // describe a different pressing, and whose last track carries the 152 s gap on
+  // enhanced CDs). Order: TOC length -> gnudb length -> the album data's own
+  // duration.
   const resolved = tracks.slice(0, trackCount).map((t, i) => {
-    const frames = gnuLens?.[k + i] ?? ps3Lens?.[i];
-    const duration = Number(t.duration) > 0 ? Number(t.duration) : (frames != null ? frames / 75 : undefined);
+    const frames = ps3Lens?.[i] ?? gnuLens?.[k + i];
+    const duration = frames != null ? frames / 75 : (Number(t.duration) > 0 ? Number(t.duration) : undefined);
     return { title: t.title, artist: t.artist || albumArtist, duration };
   });
 
@@ -279,6 +281,10 @@ function buildResponse({ album = null, error = null, toc = null } = {}) {
  * 16, 17, 18, 21, 24 and 25 are containers/lists and are left absent: writing a
  * raw string there makes the firmware read the string's first byte as an
  * element count and locks the console (fact 8).
+ *
+ * Slot 0 is a present-but-empty string (lone NUL). Static analysis found no
+ * firmware code reading album offset 0, and a console A/B across absent / lone
+ * NUL / arbitrary text showed no difference, so it carries no value here.
  * @returns {Buffer[]} Array of 30 buffers, one per field slot
  */
 function buildFieldsObject() {

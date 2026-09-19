@@ -144,7 +144,7 @@ main{text-align:center}h1{color:#7fd4ff}code{background:#222;padding:2px 6px;bor
         findAlbumLive(parsed).then((album) => {
           // Pass the decoded TOC so the track list can be aligned with the disc
           // in the drive: the audio track count truncates the list and the
-          // per-track lengths (frames, decoded values after leadout+START) are
+          // per-track lengths (frames, decoded values after END+START) are
           // matched against gnudb's own offsets to skip a leading data track
           // (see records.alignOffset).
           const tocInfo = parsed.toc

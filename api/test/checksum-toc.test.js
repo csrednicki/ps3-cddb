@@ -32,14 +32,16 @@ describe('TOC (FUN_000085f4/8730 - base 0xDF, offset +0x21)', () => {
     expect(encodedSize(TWO_DIGIT_MAX + 5, 1)).toBe(3);
   });
 
-  it('should produce a 44-byte field that roundtrips for the MJ Bad disc (11 tracks)', () => {
-    const leadOut = 217172;
-    const offs = [18587, 40952, 59005, 76550, 95105, 112697, 136650, 155622, 176720, 196225, 217172];
-    const buf = encodeTocField(11, leadOut, offs);
-    expect(buf.length).toBe(44); // size matching the real PS3 dump!
+  it('should produce a field whose used size is 1 + 3 + (nTracks+1) 2-byte values', () => {
+    // [N][END:3][START][L_1..L_11] with END = START + ΣDL − 1
+    const lens = [22365, 18053, 17545, 18555, 17592, 23953, 18972, 21098, 19505, 20947, 21709];
+    const start = 150;
+    const leadOut = start + lens.reduce((a, b) => a + b, 0) - 1;
+    const buf = encodeTocField(11, leadOut, lens, start);
+    expect(buf.length).toBe(1 + 3 + 2 * 12); // 28 bytes (the real request pads to 44)
     const dec = decodeTocField(buf);
     expect(dec.nTracks).toBe(11);
-    expect(dec.values.map(Number)).toEqual([leadOut, ...offs]);
+    expect(dec.values.map(Number)).toEqual([leadOut, start, ...lens]);
   });
 
   it('should roundtrip every boundary value (0, base-1, base, 2-digit max, large)', () => {
@@ -48,13 +50,48 @@ describe('TOC (FUN_000085f4/8730 - base 0xDF, offset +0x21)', () => {
       const lead = Math.min(v, 360000);
       const buf = encodeTocField(1, lead, [v]);
       const dec = decodeTocField(buf);
-      expect(dec.values.map(Number)).toEqual([lead, v]);
+      expect(dec.values.map(Number)).toEqual([lead, 0, v]);
     }
   });
 
   it('should offset encoded digits by +0x21 (zero encodes as "!")', () => {
     const buf = encodeTocField(0, 0, []);
     expect(buf[1]).toBe(DIGIT_OFFSET); // lead-out d2 = 0 → 0x21
+  });
+
+  it('should always read END as exactly 3 digits, whatever the track count', () => {
+    for (const n of [0, 1, 5, 40]) {
+      const lens = new Array(n).fill(3000);
+      const start = 0;
+      const leadOut = n ? start + 3000 * n - 1 : 0;
+      const dec = decodeTocField(encodeTocField(n, leadOut, lens, start));
+      expect(dec.values[0]).toBe(leadOut);
+      expect(dec.values).toHaveLength(n + 2);
+    }
+  });
+
+  it('should throw when the field is too short for the 3-digit END', () => {
+    expect(() => decodeTocField(Buffer.from([0x21, 0x21]))).toThrow(/too short/);
+  });
+
+  it('should throw on an invalid (negative) track count byte', () => {
+    expect(() => decodeTocField(Buffer.from([0x10]))).toThrow(/invalid track count/);
+  });
+
+  it('should stop cleanly when the field is truncated mid-track (no throw)', () => {
+    // nTracks = 3 but only 2 lengths present
+    const full = encodeTocField(3, 9000, [3000, 3000, 3000], 0);
+    const dec = decodeTocField(full.subarray(0, full.length - 2));
+    expect(dec.nTracks).toBe(3);
+    expect(dec.values.length).toBeLessThan(5);
+  });
+
+  it('should stop cleanly when a 4-byte 0xFF value is truncated', () => {
+    // nTracks = 1 with a single huge (> TWO_DIGIT_MAX) value → 0xFF-prefixed
+    const buf = Buffer.concat([Buffer.from([0x22]), Buffer.from([0x21, 0x21, 0x21]), Buffer.from([0xff, 0x21])]);
+    const dec = decodeTocField(buf);
+    expect(dec.nTracks).toBe(1);
+    expect(dec.values).toHaveLength(1); // the truncated 0xFF value is dropped
   });
 
   it('should build a stable dash-joined tocKey from nTracks and values', () => {

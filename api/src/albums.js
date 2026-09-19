@@ -244,21 +244,35 @@ function writeDiskCache(discId, artist, title, record) {
 }
 
 /**
+ * Frames of lead-in before the first track. The PS3 TOC's START is a plain LBA
+ * (the captured request has START = 0), while gnudb/freedb offsets and lead-out
+ * are counted from the start of the disc including this lead-in, so every
+ * offset and the lead-out need +150 before computing a disc id or a query.
+ */
+const LEAD_IN_FRAMES = 150;
+
+/**
  * Derives CDDB query inputs (per-track frame offsets, leadout in seconds,
  * track count) from a parsed PS3 request's TOC.
+ *
+ * The decoded values are `[END, START, L_1…L_N]`; the frame offsets are the
+ * running sum of the lengths starting at START, and the lead-out is END + 1.
+ * Both are shifted by LEAD_IN_FRAMES because freedb counts from the lead-in.
  * @param {object} req - parsed request; carries either `toc` (decoded) or `tocBytes` (raw)
  * @returns {{frameOffsets: number[], leadoutSeconds: number, nTracks: number}|null} null when the TOC has no tracks
  */
 function tocFromRequest(req) {
   const dec = req.toc ?? decodeTocField(req.tocBytes);
   if (!dec || dec.nTracks < 1) return null;
-  let acc = 150;
-  const frameOffsets = [150];
-  for (let i = 2; i < dec.values.length; i++) {   // skip d1 (=0)
-    acc += dec.values[i];
-    frameOffsets.push(acc);
+  const start = (dec.values[1] ?? 0) + LEAD_IN_FRAMES;
+  const lens = dec.values.slice(2); // one length per audio track
+  // nTracks offsets: track 0 starts at START, each next one after the previous length
+  const frameOffsets = [start];
+  for (let i = 0; i < dec.nTracks - 1; i++) {
+    frameOffsets.push(frameOffsets[i] + (lens[i] ?? 0));
   }
-  const leadoutSeconds = Math.floor(dec.values[0] / 75);
+  // lead-out = END + 1, shifted by the lead-in
+  const leadoutSeconds = Math.floor((dec.values[0] + 1 + LEAD_IN_FRAMES) / 75);
   return { frameOffsets, leadoutSeconds, nTracks: dec.nTracks };
 }
 
@@ -288,7 +302,7 @@ async function fetchCandidate(match, toc) {
     discNumber: album.albumDisc || 1, // disc number within the set (from DTITLE heuristic)
     tracks: album.tracks,
     frameOffsets: album.albumFrameOffsets, // gnudb "# Track frame offsets:" (frames)
-    leadout: album.albumLeadout, // gnudb "# Leadout:" (frames)
+    leadout: album.albumLeadout, // gnudb "# Leadout:" or "# Disc length:" × 75 (frames)
     __gnudbRecord: record, // raw gnudb text - saved next to the response dump
   };
 }
@@ -451,4 +465,4 @@ async function findAlbumLive(req) {
   return inflight.get(key);
 }
 
-module.exports = { loadAlbums, findAlbumByRawToc, findAlbumLive, lookupLive, writeDiskCache, purgeDiskCache, setTestRecord, setTestRecordFile, isTestMode, loadTestRecordFromEnv };
+module.exports = { loadAlbums, findAlbumByRawToc, findAlbumLive, lookupLive, writeDiskCache, purgeDiskCache, setTestRecord, setTestRecordFile, isTestMode, loadTestRecordFromEnv, tocFromRequest };

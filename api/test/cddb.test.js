@@ -264,16 +264,26 @@ describe('parseAlbum', () => {
     expect(rec.tracks.length).toBe(1); // only index 0 < 3
   });
 
-  it('should split TTITLE on the first "/" for a Various album (freedb convention)', () => {
+  it('should split a Various TTITLE on " - " before the bare "/"', () => {
+    // "Queen/David Bowie - Under Pressure": the dash wins, so the artist keeps its "/"
     const rec = parseAlbum('DTITLE=Various / Hits\nTTITLE0=Queen/David Bowie - Under Pressure\nTTITLE1=Simple Artist / Song\n');
     expect(rec.tracks).toEqual([
-      { title: 'David Bowie - Under Pressure', artist: 'Queen' },
+      { title: 'Under Pressure', artist: 'Queen/David Bowie' },
       { title: 'Song', artist: 'Simple Artist' },
     ]);
   });
 
-  it('should split a per-track artist containing "/" at the space-separated separator for a Various album', () => {
-    // "AC/DC / Back in Black": the " / " separator is preferred over the first "/"
+  it('should split a Various TTITLE on a bare "/" only when it is the single one', () => {
+    const rec = parseAlbum('DTITLE=Various / Hits\nTTITLE0=AC/DC/Back in Black\n');
+    expect(rec.tracks).toEqual([{ title: 'AC/DC/Back in Black', artist: '' }]); // two "/" → no split
+  });
+
+  it('should not split a Various TTITLE that has no separator at all', () => {
+    const rec = parseAlbum('DTITLE=Various / Hits\nTTITLE0=Just A Title\n');
+    expect(rec.tracks).toEqual([{ title: 'Just A Title', artist: '' }]);
+  });
+
+  it('should prefer the " / " separator for a Various TTITLE when present', () => {
     const rec = parseAlbum('DTITLE=Various Artists / Hits\nTTITLE0=AC/DC / Back in Black\n');
     expect(rec.tracks).toEqual([{ title: 'Back in Black', artist: 'AC/DC' }]);
   });
@@ -297,6 +307,17 @@ describe('parseAlbum', () => {
       'TTITLE0=T',
     ].join('\n'));
     expect(rec.albumFrameOffsets).toEqual([150, 8333, 25066]);
+    expect(rec.albumLeadout).toBe(225171);
+  });
+
+  it('should fall back to "# Disc length: N seconds" × 75 when "# Leadout:" is absent', () => {
+    const rec = parseAlbum('# Disc length: 3003 seconds\nDTITLE=A / B\nTTITLE0=T\n');
+    expect(rec.albumDiscLength).toBe(3003);
+    expect(rec.albumLeadout).toBe(3003 * 75);
+  });
+
+  it('should prefer "# Leadout:" over "# Disc length:" when both are present', () => {
+    const rec = parseAlbum('# Disc length: 3003 seconds\n# Leadout: 225171\nDTITLE=A / B\n');
     expect(rec.albumLeadout).toBe(225171);
   });
 

@@ -159,7 +159,7 @@ function parseMatches(reply) {
 function parseAlbum(text, maxTracks = 99) {
   const album = {
     albumArtist: '', albumTitle: '', albumGenre: '', albumYear: '', albumDiscId: '',
-    albumDisc: 0, albumFrameOffsets: [], albumLeadout: null, tracks: [],
+    albumDisc: 0, albumFrameOffsets: [], albumLeadout: null, albumDiscLength: null, tracks: [],
   };
   const titles = new Array(maxTracks).fill('');
   let highest = -1;
@@ -176,6 +176,8 @@ function parseAlbum(text, maxTracks = 99) {
     if (line.startsWith('#')) {
       const lm = line.match(/^#\s*Leadout:\s*(\d+)/);
       if (lm) album.albumLeadout = parseInt(lm[1], 10);
+      const dm = line.match(/^#\s*Disc length:\s*(\d+)/);
+      if (dm) album.albumDiscLength = parseInt(dm[1], 10);
       continue;
     }
     if (line.startsWith('DTITLE=') && !album.albumTitle) {
@@ -205,21 +207,38 @@ function parseAlbum(text, maxTracks = 99) {
     }
   }
 
-  // "Various / Album" discs carry the per-track artist in each TTITLE, split on
-  // the first "/" per freedb convention. The space-separated " / " is preferred
-  // when present, so an artist containing "/" (e.g. "AC/DC") is not truncated.
+  // "Various / Album" discs carry the per-track artist in each TTITLE. Prefer
+  // the unambiguous " / " separator, then " - ", and fall back to a bare "/"
+  // only when there is exactly one (so "AC/DC - Thunderstruck" splits on the
+  // dash, not on the slash inside the artist name).
   const various = /^various/i.test(album.albumArtist.trim());
   const n = highest + 1;
   for (let i = 0; i < n; i++) {
     const raw = titles[i] || '';
-    const spaced = raw.indexOf(' / ');
-    const sep = various ? (spaced !== -1 ? spaced : raw.indexOf('/')) : spaced;
-    const delim = sep !== -1 && raw[sep] === ' ' ? 3 : 1;
+    let sep = -1;
+    let delim = 0;
+    if (various) {
+      const spaced = raw.indexOf(' / ');
+      const dash = raw.indexOf(' - ');
+      const slash = raw.indexOf('/');
+      if (spaced !== -1) { sep = spaced; delim = 3; }
+      else if (dash !== -1) { sep = dash; delim = 3; }
+      else if (slash !== -1 && raw.indexOf('/', slash + 1) === -1) { sep = slash; delim = 1; }
+    } else {
+      sep = raw.indexOf(' / ');
+      delim = 3;
+    }
     // per-track artist ("Artist / Title") when present, otherwise empty and the
     // album artist is used as the fallback by the record builder
     const artist = sep !== -1 ? raw.slice(0, sep).trim() : '';
     const title = sep !== -1 ? raw.slice(sep + delim).trim() : raw;
     album.tracks.push({ title, artist });
+  }
+  // Some records omit "# Leadout:" but carry "# Disc length: N seconds"; the
+  // freedb disc length is measured from zero including the 2 s lead-in, so the
+  // lead-out in frames is N × 75.
+  if (album.albumLeadout == null && album.albumDiscLength > 0) {
+    album.albumLeadout = album.albumDiscLength * 75;
   }
   album.albumArtist = album.albumArtist.trim();
   album.albumTitle = album.albumTitle.trim();

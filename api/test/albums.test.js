@@ -152,11 +152,23 @@ describe('findAlbumLive - gnudb (lookup live)', () => {
     jest.dontMock('../src/toc');
     const { encodeTocField } = jest.requireActual('../src/toc');
     seedLiveMatch();
-    const tocBytes = encodeTocField(2, 16000, [1000, 2000]);
+    // [END, START, L_1, L_2] with END = START + ΣDL − 1
+    const tocBytes = encodeTocField(2, 16000, [1000, 2000], 150);
     const album = await albums.findAlbumLive({ rawTocHex: '00112233', tocBytes });
     expect(album.title).toBe('Sample Sounds');
-    // tocFromRequest: values=[16000(leadout), 1000, 2000] → skips d1, offset = 150 + Σ(d2..)
-    expect(queryCddbMatches).toHaveBeenCalledWith([150, 2150], 2, 213);
+    // tocFromRequest: freedb offsets = START+150, then +DL1 → [300, 1300]
+    expect(queryCddbMatches).toHaveBeenCalledWith([300, 1300], 2, 215);
+  });
+
+  it('should build a single frame offset for a one-track disc', () => {
+    const toc = albums.tocFromRequest({ toc: { nTracks: 1, values: [9000, 150, 8850] } });
+    expect(toc.frameOffsets).toEqual([300]); // 150 START + 150 lead-in
+    expect(toc.leadoutSeconds).toBe(122);    // (9000 + 1 + 150) / 75
+  });
+
+  it('should fall back to START=0 when a decoded TOC has no START value', () => {
+    const toc = albums.tocFromRequest({ toc: { nTracks: 2, values: [9000] } });
+    expect(toc.frameOffsets).toEqual([150, 150]); // 0 START + 150 lead-in
   });
 
   it('should slice tracks down to the physical disc track count when gnudb returns more', async () => {
@@ -323,7 +335,8 @@ describe('findAlbumLive - disk cache hit/miss', () => {
    * @returns {object} a parsed-request-shaped object suitable for findAlbumLive
    */
   function unseededReq(tocHex) {
-    return { rawTocHex: tocHex, toc: { nTracks: 2, values: [16000, 0, 1000, 2000] } };
+    // [END, START, L_1, L_2]
+    return { rawTocHex: tocHex, toc: { nTracks: 2, values: [16000, 150, 1000, 2000] } };
   }
 
   /**
@@ -334,9 +347,13 @@ describe('findAlbumLive - disk cache hit/miss', () => {
    */
   function discIdFor(req) {
     const { nTracks, values } = req.toc;
-    const frameOffsets = [150];
-    for (let i = 2; i < values.length; i++) frameOffsets.push(frameOffsets[frameOffsets.length - 1] + values[i]);
-    return getDiscId(frameOffsets, nTracks, Math.floor(values[0] / 75)).toString(16).padStart(8, '0');
+    // freedb counts from the lead-in: offsets start at START + 150
+    const frameOffsets = [values[1] + 150];
+    for (let i = 0; i < nTracks - 1; i++) {
+      frameOffsets.push(frameOffsets[i] + values[2 + i]);
+    }
+    const leadoutSeconds = Math.floor((values[0] + 1 + 150) / 75);
+    return getDiscId(frameOffsets, nTracks, leadoutSeconds).toString(16).padStart(8, '0');
   }
 
   it('should serve a fresh disk-cache entry without calling gnudb', async () => {
@@ -479,10 +496,11 @@ describe('findAlbumLive - test mode (fixed record)', () => {
     const album = await albums.findAlbumLive(req);
     // recompute the disc id exactly like findAlbumLive does
     const { getDiscId } = require('../src/cddb');
-    const values = req.toc.values;
-    const frameOffsets = [150];
-    for (let i = 2; i < values.length; i++) frameOffsets.push(frameOffsets[frameOffsets.length - 1] + values[i]);
-    const expected = getDiscId(frameOffsets, req.toc.nTracks, Math.floor(values[0] / 75)).toString(16).padStart(8, '0');
+    const { nTracks, values } = req.toc;
+    const frameOffsets = [values[1] + 150];
+    for (let i = 0; i < nTracks - 1; i++) frameOffsets.push(frameOffsets[i] + values[2 + i]);
+    const leadoutSeconds = Math.floor((values[0] + 1 + 150) / 75);
+    const expected = getDiscId(frameOffsets, nTracks, leadoutSeconds).toString(16).padStart(8, '0');
     expect(album.discId).toBe(expected);
     expect(album.__gnudbRecord).toContain(`DISCID=${expected}`);
     // the fixture record's own disc id must be gone

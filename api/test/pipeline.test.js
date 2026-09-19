@@ -49,12 +49,13 @@ describe('BIN header (buildBinHeader)', () => {
 describe('Synthetic request → response (roundtrip)', () => {
   it('should roundtrip the TOC field through encodeTocField/decodeTocField', () => {
     const nTracks = 3;
-    const leadOut = 20000;
-    const offsets = [1000, 5000, 9000];
-    const field = encodeTocField(nTracks, leadOut, offsets);
+    const lengths = [1000, 2000, 3000];
+    const start = 0;
+    const leadOut = start + lengths.reduce((a, b) => a + b, 0) - 1;
+    const field = encodeTocField(nTracks, leadOut, lengths, start);
     const dec = require('../src/toc').decodeTocField(field);
     expect(dec.nTracks).toBe(nTracks);
-    expect(dec.values.map(Number)).toEqual([leadOut, ...offsets]);
+    expect(dec.values.map(Number)).toEqual([leadOut, start, ...lengths]);
   });
 
   it('should emit a single ALBUM record readable by the TLV reader', () => {

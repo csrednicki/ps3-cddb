@@ -150,9 +150,9 @@ describe('tlv - readers (errors and edges)', () => {
 
 describe('toc - tocFieldSize, encodedSize, encodeValue', () => {
   it('should sum the sizes of all encoded TOC elements plus the count byte', () => {
-    // leadout 3 B, 3 offsets 2B+2B+2B, +1 (nTracks)
+    // 1 (nTracks) + 3 (END) + START 2B + 3 lengths 2B each
     const size = tocFieldSize(3, 100, [1, 2, 3]);
-    expect(size).toBe(1 + 3 + 2 * 3);
+    expect(size).toBe(1 + 3 + 2 * 4);
   });
 
   it('should report 4 bytes for track values above TWO_DIGIT_MAX', () => {
@@ -166,7 +166,7 @@ describe('toc - tocFieldSize, encodedSize, encodeValue', () => {
     const buf = Buffer.alloc(encodedSize(v, 1));
     const used = encodeValue(buf, 0, v, 1);
     expect(used).toBe(3);
-    // we read it back from the {nTracks:0} base via decode
+    // we read it back from the {nTracks:0} base via decode (no START/lengths follow)
     const full = Buffer.concat([Buffer.from([0x21 /* nTracks 0 */]), buf]);
     const dec = decodeTocField(full);
     expect(dec.values[0]).toBe(v);
@@ -372,6 +372,17 @@ describe('records.albumRecord - TOC alignment and durations', () => {
     const group = readContainer(readContainer(slots[15])[0]);
     expect(readContainer(readContainer(group[0])[0])[3].readUInt16LE(0)).toBe(20); // 1500/75
     expect(group[2].readUInt16LE(0)).toBe(60); // 20 + 40
+  });
+
+  it('should prefer the TOC length over the gnudb length (TOC describes the inserted disc)', () => {
+    const rec = albumRecord(
+      { title: 'X', artist: 'Y', genre: 'Z', frameOffsets: [150, 7650, 15150], leadout: 22650, tracks: [{ title: 'A' }, { title: 'B' }] },
+      { audioTrackCount: 2, trackLengths: [750, 3000] },
+    );
+    const slots = readContainer(rec);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(readContainer(readContainer(group[0])[0])[3].readUInt16LE(0)).toBe(10); // 750/75 from the TOC
+    expect(group[2].readUInt16LE(0)).toBe(50); // 10 + 40
   });
 
   it('should leave durations absent when neither gnudb nor the TOC provide lengths', () => {
