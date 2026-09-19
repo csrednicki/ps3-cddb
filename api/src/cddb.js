@@ -141,9 +141,11 @@ function parseMatches(reply) {
 
 /**
  * Parses a gnudb "read" record's DTITLE/DYEAR/DGENRE/TTITLE lines into an album.
+ * A TTITLE may carry a per-track artist as "Artist / Title" (the same separator
+ * as DTITLE); when present it is split out into the track's `artist`.
  * @param {string} text - raw gnudb record text
  * @param {number} [maxTracks=99] - highest TTITLE index to accept (out-of-range indices are ignored)
- * @returns {{albumArtist: string, albumTitle: string, albumGenre: string, albumYear: string, albumDiscId: string, albumDisc: number, tracks: Array<{title: string}>}}
+ * @returns {{albumArtist: string, albumTitle: string, albumGenre: string, albumYear: string, albumDiscId: string, albumDisc: number, tracks: Array<{title: string, artist: string}>}}
  */
 function parseAlbum(text, maxTracks = 99) {
   const album = { albumArtist: '', albumTitle: '', albumGenre: '', albumYear: '', albumDiscId: '', albumDisc: 0, tracks: [] };
@@ -180,7 +182,15 @@ function parseAlbum(text, maxTracks = 99) {
   }
 
   const n = highest + 1;
-  for (let i = 0; i < n; i++) album.tracks.push({ title: titles[i] || '' });
+  for (let i = 0; i < n; i++) {
+    const raw = titles[i] || '';
+    const sep = raw.indexOf(' / ');
+    // per-track artist ("Artist / Title") when present, otherwise empty and the
+    // album artist is used as the fallback by the record builder
+    const artist = sep !== -1 ? raw.slice(0, sep) : '';
+    const title = sep !== -1 ? raw.slice(sep + 3) : raw;
+    album.tracks.push({ title, artist });
+  }
   album.albumArtist = album.albumArtist.trim();
   album.albumTitle = album.albumTitle.trim();
   album.albumGenre = album.albumGenre.trim();

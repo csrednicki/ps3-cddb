@@ -198,7 +198,20 @@ describe('parseAlbum', () => {
     expect(rec.albumArtist).toBe('Test Artist');
     expect(rec.albumTitle).toBe('Sample Sounds');
     expect(rec.albumGenre).toBe('Pop');
-    expect(rec.tracks).toEqual([{ title: 'Sample Sounds' }, { title: 'Second Track' }]);
+    expect(rec.tracks).toEqual([{ title: 'Sample Sounds', artist: '' }, { title: 'Second Track', artist: '' }]);
+  });
+
+  it('should split a per-track "Artist / Title" TTITLE into artist and title', () => {
+    const rec = parseAlbum('DTITLE=Album Artist / Album\nTTITLE0=Some other artist / Simple Title\nTTITLE1=Another artist / Radio Edit\n');
+    expect(rec.tracks).toEqual([
+      { title: 'Simple Title', artist: 'Some other artist' },
+      { title: 'Radio Edit', artist: 'Another artist' },
+    ]);
+  });
+
+  it('should leave a per-track artist empty when a TTITLE has no " / " separator', () => {
+    const rec = parseAlbum('DTITLE=A / B\nTTITLE0=Plain Title\n');
+    expect(rec.tracks).toEqual([{ title: 'Plain Title', artist: '' }]);
   });
 
   it('should leave the artist empty when DTITLE has no " / " separator', () => {
@@ -233,17 +246,17 @@ describe('parseAlbum', () => {
     expect(rec.albumArtist).toBe('Artist');
     expect(rec.albumTitle).toBe('Title');
     expect(rec.albumGenre).toBe('Jazz');
-    expect(rec.tracks).toEqual([{ title: '  ' }]); // TTITLE is not trimmed
+    expect(rec.tracks).toEqual([{ title: '  ', artist: '' }]); // TTITLE is not trimmed
   });
 
   it('should keep the first TTITLE occurrence for a duplicated index', () => {
     const rec = parseAlbum('DTITLE=A / B\nTTITLE0=First\nTTITLE0=Second\n');
-    expect(rec.tracks).toEqual([{ title: 'First' }]);
+    expect(rec.tracks).toEqual([{ title: 'First', artist: '' }]);
   });
 
   it('should raise the track count only for the highest seen index', () => {
     const rec = parseAlbum('DTITLE=A / B\nTTITLE2=C\nTTITLE0=A\n');
-    expect(rec.tracks).toEqual([{ title: 'A' }, { title: '' }, { title: 'C' }]);
+    expect(rec.tracks).toEqual([{ title: 'A', artist: '' }, { title: '', artist: '' }, { title: 'C', artist: '' }]);
   });
 
   it('should limit tracked TTITLE indices to maxTracks', () => {

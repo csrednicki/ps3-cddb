@@ -30,7 +30,7 @@
 # Artid: 62b7cd8d-ff04-4e8b-a615-6fab903535bd
 #
 DISCID=b40bb90f
-DTITLE=Test artist / This is test album data!
+DTITLE=Bla bla / This is test album data!
 DYEAR=2033-12-13
 DGENRE=dance
 # --- test track titles: one per typical title form --------------------------
@@ -52,8 +52,8 @@ DGENRE=dance
 # 12  empty title                                   -> (empty)
 # 13  long title, no brackets                       -> unchanged
 # 14  non-ASCII + symbols                           -> Ünïcødé ★ #1 & Symbols
-TTITLE0=Simple Title
-TTITLE1=Radio Edit (radio edit)
+TTITLE0=Some other artist / Simple Title
+TTITLE1=Another artist / Radio Edit (radio edit)
 TTITLE2=Extended Mix [Club Version]
 TTITLE3=曲名（Live）
 TTITLE4=曲名【Bonus Track】
