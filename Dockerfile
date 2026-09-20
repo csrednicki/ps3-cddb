@@ -20,10 +20,10 @@ COPY api/samples api/samples
 COPY api/config.json api/config.json
 
 # writable runtime dirs (mount volumes over them to persist data)
-RUN mkdir -p cache dumps logs
+RUN mkdir -p db dumps logs
 
 ENV NODE_ENV=production \
-    CDDB_LOG_COLOR=false
+    LOG_COLOR=false
 
 EXPOSE 53/udp 53/tcp 80/tcp
 

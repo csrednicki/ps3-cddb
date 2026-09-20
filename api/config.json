@@ -1,8 +1,7 @@
 {
   "client": {
     "name": "PS3CddbEmulator",
-    "version": "1.0.0",
-    "userName": "AMG Test User"
+    "version": "1.1.0"
   },
   "dns": {
     "port": 53,
@@ -31,7 +30,7 @@
     "boundary": "---------------------------265001916915724",
     "replyDelayMs": 3000,
     "rateLimit": {
-      "maxPerSecondPerIp": 5
+      "maxPerSecondPerIp": 50
     },
     "blacklist": {
       "violationWindowMs": 60000,
@@ -48,8 +47,10 @@
     "logResponses": true
   },
   "gnudbCache": {
-    "dir": "cache",
     "ttlSeconds": 3600
+  },
+  "database": {
+    "dbFile": "db/ps3cddb.sqlite"
   },
   "gnudb": {
     "host": "gnudb.gnudb.org",

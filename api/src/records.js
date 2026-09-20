@@ -205,9 +205,7 @@ function albumRecord(album, toc) {
   const trackSeconds = resolved.reduce((s, t) => s + (Number(t.duration) > 0 ? Number(t.duration) : 0), 0);
   const albumSeconds = Number(album.totalDuration) > 0 ? Number(album.totalDuration) : trackSeconds;
 
-  // Track group: [trackList, disc number, disc length [s]] - element 2 is the
-  // disc length in seconds, NOT a track count (fact 9); 0 when unknown. Only
-  // group [0] is used.
+  // Track group: [trackList, disc number, disc length [s]]
   const albumTracks = writeContainer([writeContainer(trackFields), writeI16(discNumber), secs16(albumSeconds)]);
 
   const fields = buildFieldsObject();

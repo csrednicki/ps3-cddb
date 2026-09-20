@@ -18,7 +18,15 @@ const { loadTestRecordFromEnv } = require('./albums');
  */
 async function main() {
   const cfg = loadConfig();
-  log.info(`=== ${cfg.client.name} ${cfg.client.version} - CD audio metadata proxy ===`);
+
+  // banner
+  log.info(` ___  ___ ____   ___ ___  ___  ___                         `);
+  log.info(`| _ \\/ __|__ /  / __|   \\|   \\| _ )  _ __ _ _ _____ ___  _ `);
+  log.info(`|  _/\\__ \\|_ \\ | (__| |) | |) | _ \\ | '_ \\ '_/ _ \\ \\ / || |`);
+  log.info(`|_|  |___/___/  \\___|___/|___/|___/ | .__/_| \\___/_\\_\\\\_, |`);
+  log.info(`                                    |_|               |__/ `);
+
+  log.info(`Server starting version ${cfg.client.version}`);
   log.info(`[config] answer IP: ${cfg.dns.answerIp} (set PS3 primary DNS to this address)`);
   loadTestRecordFromEnv();
 
@@ -35,7 +43,7 @@ async function main() {
     log.error(`[http] cannot bind :${cfg.http.port} (${e.code ?? e.message}) - change the port in config.json`);
   }
 
-  log.info(`=== ready - the PS3 should point to ${cfg.dns.answerIp} as its DNS ===`);
+  log.info(`[ready] PS3 should point to ${cfg.dns.answerIp} as its main DNS server`);
 }
 
 process.on('uncaughtException', (e) => log.error(`uncaught: ${e.stack ?? e.message}`));
