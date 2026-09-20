@@ -3,6 +3,7 @@ coverage
 dumps
 logs
 cache
+db
 api/cache
 api/test
 api/tools
