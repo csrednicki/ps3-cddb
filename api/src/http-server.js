@@ -89,7 +89,13 @@ function startHttpServer() {
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
       const raw = Buffer.concat(chunks);
-      log.info(`[http] ${req.method} ${req.url} from ${req.socket.remoteAddress} (${raw.length} B)`);
+      // Static asset probes (favicon, cover art) are logged at debug: a page
+      // load fires one per cover and they would drown the request log.
+      const quiet = req.url === '/favicon.ico' || req.url.startsWith('/cover/');
+      // body size only when there is one - a GET has no body, and "(0 B)" on
+      // every page load reads like a failure
+      const size = raw.length ? ` (${raw.length} B)` : '';
+      (quiet ? log.debug : log.info)(`[http] ${req.method} ${req.url} from ${req.socket.remoteAddress}${size}`);
 
       // GET / - gallery page: every disc inserted since the server started,
       // updated live over SSE (see gallery.js).
@@ -100,9 +106,31 @@ function startHttpServer() {
         return;
       }
 
+      // GET /favicon.ico - answer 204 rather than falling through to the
+      // redirect below, which would make the browser fetch the whole page again.
+      if (req.method === 'GET' && req.url === '/favicon.ico') {
+        res.writeHead(204, { Connection: 'close' });
+        res.end();
+        return;
+      }
+
       // GET /events - SSE stream feeding the gallery page (snapshot + updates).
       if (req.method === 'GET' && req.url === '/events') {
         gallery.handleEvents(req, res);
+        return;
+      }
+
+      // GET /cover/<discId> - cover art stored in the gallery database, so the
+      // page does not depend on coverartarchive.org being reachable.
+      if (req.method === 'GET' && req.url.startsWith('/cover/')) {
+        const cover = gallery.getCover(decodeURIComponent(req.url.slice('/cover/'.length)));
+        if (!cover) {
+          res.writeHead(404, { Connection: 'close' });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': cover.type, 'Cache-Control': 'max-age=86400', Connection: 'close' });
+        res.end(cover.blob);
         return;
       }
 

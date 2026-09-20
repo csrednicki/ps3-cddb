@@ -35,7 +35,14 @@ function fakePair() {
   return { res, req, writes };
 }
 
-beforeEach(() => gallery.reset());
+beforeEach(() => {
+  gallery.reset();
+  // addAlbum kicks off a fire-and-forget cover download; stub it so the unit
+  // test never opens a socket to the fake cover hosts used below.
+  global.fetch = jest.fn(async () => ({ ok: false, status: 503 }));
+});
+
+afterAll(() => { delete global.fetch; });
 
 describe('gallery.addAlbum / getAlbums', () => {
   it('should store a single album as one card', () => {

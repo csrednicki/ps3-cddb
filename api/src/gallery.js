@@ -1,13 +1,15 @@
 'use strict';
 
 /**
- * In-memory gallery of the discs inserted into the PS3 since the server
- * started, plus the web page that shows them.
+ * Gallery of the discs inserted into the PS3, plus the web page that shows
+ * them. Every disc the PS3 asks about is added here by http-server.js right
+ * after the gnudb lookup, and the page is updated live over Server-Sent
+ * Events (SSE) - no polling, no extra dependencies.
  *
- * There is deliberately no database: the store lives only in this process and
- * is lost on restart (see README). Every disc the PS3 asks about is added here
- * by http-server.js right after the gnudb lookup, and the page is updated live
- * over Server-Sent Events (SSE) - no polling, no extra dependencies.
+ * The store is backed by SQLite (node:sqlite, built into Node >= 22.5) so it
+ * survives a restart; the in-memory Map is the read path and the DB is written
+ * through on every change. If SQLite cannot be opened the gallery degrades to
+ * memory-only rather than taking the server down.
  *
  * Deduplication is by disc id: re-inserting the same disc replaces its entry
  * instead of adding a second one. A disc whose TOC is ambiguous can resolve to
@@ -20,6 +22,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const log = require('./logger');
+const { openDb, DB_PATH } = require('./db');
 
 // discId -> { discId, insertedAt, source, albums: card[] }
 const discs = new Map();
@@ -31,6 +34,146 @@ const pings = new Set();
 const TEMPLATE_PATH = path.join(__dirname, 'gallery.html');
 
 let template = null;
+let loaded = false;
+
+/**
+ * Rebuilds the in-memory store from SQLite, once per process. Called before
+ * any read so a restart shows the discs inserted before it.
+ * @returns {void}
+ */
+function loadFromDb() {
+  if (loaded) return;
+  loaded = true;
+  const d = openDb();
+  if (!d) return;
+  try {
+    const stored = new Set(d.prepare('SELECT disc_id FROM covers').all().map((r) => r.disc_id));
+    for (const r of d.prepare('SELECT * FROM discs ORDER BY inserted_at, rowid').all()) {
+      const card = {
+        key: r.card_key, discId: r.disc_id, title: r.title, artist: r.artist,
+        genre: r.genre, year: r.year, cover: r.cover, artid: r.artid,
+        numDiscs: r.num_discs, discNumber: r.disc_number,
+        tracks: JSON.parse(r.tracks), source: r.source, insertedAt: r.inserted_at,
+      };
+      // the primary card points at the locally stored image instead of the
+      // remote URL, so the page works when coverartarchive.org is unreachable
+      if (r.idx === 0 && stored.has(r.disc_id)) card.cover = coverUrl(r.disc_id);
+      const group = discs.get(r.disc_id);
+      if (group) group.albums.push(card);
+      else discs.set(r.disc_id, { discId: r.disc_id, insertedAt: r.inserted_at, source: r.source, albums: [card] });
+    }
+    if (discs.size) log.info(`[gallery] restored ${discs.size} disc(s) from ${DB_PATH}`);
+  } catch (e) {
+    log.warn(`[gallery] sqlite read failed: ${e.message}`);
+  }
+}
+
+/**
+ * Writes one disc group to SQLite, replacing whatever was stored for that disc
+ * id (the group is the unit of replacement, matching the in-memory Map).
+ * @param {{discId: string, albums: object[]}} group - the stored group
+ * @returns {void}
+ */
+function saveGroup(group) {
+  const d = openDb();
+  if (!d) return;
+  try {
+    d.exec('BEGIN');
+    d.prepare('DELETE FROM discs WHERE disc_id = ?').run(group.discId);
+    const ins = d.prepare(`INSERT INTO discs
+      (disc_id, idx, card_key, title, artist, genre, year, cover, artid, num_discs, disc_number, tracks, source, inserted_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    group.albums.forEach((c, i) => ins.run(
+      group.discId, i, c.key, c.title, c.artist, c.genre, c.year, c.cover, c.artid,
+      c.numDiscs, c.discNumber, JSON.stringify(c.tracks), c.source, c.insertedAt,
+    ));
+    d.exec('COMMIT');
+  } catch (e) {
+    try { d.exec('ROLLBACK'); } catch { /* nothing to roll back */ }
+    log.warn(`[gallery] sqlite write failed: ${e.message}`);
+  }
+}
+
+/**
+ * Local URL the page uses for a disc's stored cover art.
+ * @param {string} discId - CDDB disc id
+ * @returns {string} the path served by http-server.js
+ */
+function coverUrl(discId) {
+  return `/cover/${discId}`;
+}
+
+/**
+ * Whether cover art bytes are already stored for a disc.
+ * @param {string} discId - CDDB disc id
+ * @returns {boolean} true when a blob is present
+ */
+function hasCover(discId) {
+  const d = openDb();
+  if (!d) return false;
+  try {
+    return !!d.prepare('SELECT 1 FROM covers WHERE disc_id = ?').get(discId);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reads the stored cover art for a disc.
+ * @param {string} discId - CDDB disc id
+ * @returns {{type: string, blob: Buffer}|null} the image, or null when absent
+ */
+function getCover(discId) {
+  const d = openDb();
+  if (!d) return null;
+  try {
+    const r = d.prepare('SELECT type, blob FROM covers WHERE disc_id = ?').get(discId);
+    return r ? { type: r.type, blob: Buffer.from(r.blob) } : null;
+  } catch (e) {
+    log.warn(`[gallery] cover read failed: ${e.message}`);
+    return null;
+  }
+}
+
+// A coverartarchive image is a few hundred KB; anything past this is either a
+// mistake or a hostile URL, and it would land in the DB verbatim.
+const COVER_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Downloads the primary card's cover art into SQLite so the page keeps working
+ * when coverartarchive.org is unreachable. Deliberately not awaited by
+ * addAlbum: the PS3 response must not wait on a third-party image host, and a
+ * failure just leaves the remote URL in place.
+ * @param {{discId: string, albums: object[]}} group - the stored group
+ * @returns {Promise<void>} resolves once the fetch finished or was skipped
+ */
+async function fetchCover(group) {
+  const card = group.albums[0];
+  const url = card?.cover;
+  if (!/^https?:\/\//i.test(url ?? '')) return;
+  const d = openDb();
+  if (!d) return;
+  try {
+    if (hasCover(group.discId)) {
+      card.cover = coverUrl(group.discId);
+      broadcast({ type: 'update', group });
+      return;
+    }
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = Buffer.from(await res.arrayBuffer());
+    if (!blob.length || blob.length > COVER_MAX_BYTES) throw new Error(`unusable size ${blob.length}`);
+    const type = res.headers.get('content-type')?.split(';')[0] || 'image/jpeg';
+    d.prepare(`INSERT INTO covers (disc_id, type, blob) VALUES (?,?,?)
+      ON CONFLICT(disc_id) DO UPDATE SET type = excluded.type, blob = excluded.blob`)
+      .run(group.discId, type, blob);
+    card.cover = coverUrl(group.discId);
+    log.info(`[gallery] cover stored: ${group.discId} (${blob.length} B, ${type})`);
+    broadcast({ type: 'update', group });
+  } catch (e) {
+    log.debug(`[gallery] cover fetch failed for ${group.discId}: ${e.message}`);
+  }
+}
 
 /**
  * Normalizes one track into the shape the page renders.
@@ -124,7 +267,10 @@ function addAlbum(album, { discId, source = 'live' } = {}) {
   if (primary > 0) cards.unshift(cards.splice(primary, 1)[0]);
   cards.forEach((c, i) => { c.key = i === 0 ? discId : `${discId}:${i}`; });
   const group = { discId, insertedAt, source, albums: cards };
+  loadFromDb();
   discs.set(discId, group);
+  saveGroup(group);
+  fetchCover(group); // fire-and-forget: never delays the PS3 response
   const chosen = cards[0].cover ? ' (chosen: has cover)' : '';
   log.info(`[gallery] + ${discId} "${cards[0].title}" - ${cards[0].artist} (${cards.length} candidate(s), ${cards[0].tracks.length} tracks)${chosen}`);
   broadcast({ type: 'update', group });
@@ -136,6 +282,7 @@ function addAlbum(album, { discId, source = 'live' } = {}) {
  * @returns {object[]} every group, in insertion order
  */
 function getGroups() {
+  loadFromDb();
   return [...discs.values()];
 }
 
@@ -144,6 +291,7 @@ function getGroups() {
  * @returns {object[]} every card, in insertion order
  */
 function getAlbums() {
+  loadFromDb();
   const out = [];
   for (const group of discs.values()) out.push(...group.albums);
   return out;
@@ -232,6 +380,8 @@ function loadTemplate() {
  */
 function reset() {
   discs.clear();
+  loaded = true; // do not re-read the DB we are about to wipe
+  try { openDb()?.exec('DELETE FROM discs; DELETE FROM covers'); } catch { /* memory-only mode */ }
   for (const ping of pings) clearInterval(ping);
   pings.clear();
   for (const res of clients) {
@@ -240,4 +390,4 @@ function reset() {
   clients.clear();
 }
 
-module.exports = { addAlbum, getAlbums, getGroups, handleEvents, renderPage, reset };
+module.exports = { addAlbum, getAlbums, getGroups, getCover, handleEvents, renderPage, reset };

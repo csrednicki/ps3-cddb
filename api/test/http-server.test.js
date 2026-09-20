@@ -137,6 +137,33 @@ describe('startHttpServer - GET / (gallery page)', () => {
     expect(res.status).toBe(302);
     expect(res.headers.location).toBe('/');
   });
+
+  it('should answer 204 for /favicon.ico instead of redirecting to the page', async () => {
+    const res = await rawRequest('GET', '/favicon.ico', Buffer.alloc(0));
+    expect(res.status).toBe(204);
+    expect(res.body.length).toBe(0);
+  });
+
+  it('should serve stored cover art from GET /cover/<discId>', async () => {
+    const png = Buffer.from([1, 2, 3]);
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      headers: new Map([['content-type', 'image/png']]),
+      arrayBuffer: async () => png,
+    }));
+    gallery.addAlbum({ title: 'Art', cover: 'https://x/1.png', tracks: [] }, { discId: 'abc12345' });
+    await new Promise((r) => setImmediate(r));
+
+    const res = await rawRequest('GET', '/cover/abc12345', Buffer.alloc(0));
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.body).toEqual(png);
+  });
+
+  it('should respond 404 for a disc with no stored cover', async () => {
+    const res = await rawRequest('GET', '/cover/nope0000', Buffer.alloc(0));
+    expect(res.status).toBe(404);
+  });
 });
 
 describe('startHttpServer - multipart without a closing marker (end !== -1 fallback)', () => {
@@ -161,7 +188,13 @@ describe('startHttpServer - POST /sdkrequest', () => {
   beforeAll(async () => { server = await startHttpServer(); });
   afterAll(async () => { server.close(); });
 
-  beforeEach(() => { findAlbumLive.mockReset(); gallery.reset(); });
+  beforeEach(() => {
+    findAlbumLive.mockReset();
+    gallery.reset();
+    // addAlbum starts a fire-and-forget cover download; stub it so no test
+    // opens a socket to the fake cover hosts used below.
+    global.fetch = jest.fn(async () => ({ ok: false, status: 503 }));
+  });
 
   it('should respond with an empty 200 (not 404) for POST on an unknown path', async () => {
     const res = await rawRequest('POST', '/other', Buffer.alloc(0));
@@ -270,6 +303,8 @@ describe('startHttpServer - POST /sdkrequest', () => {
   it('should add the matched album to the gallery after a POST', async () => {
     const album = { title: 'Sample Sounds', artist: 'TA', genre: 'Pop', year: '2001', cover: 'https://coverartarchive.org/release/x/1-500.jpg', tracks: [{ title: 'Sample Sounds' }] };
     findAlbumLive.mockResolvedValue(album);
+    // the cover download is fire-and-forget; stub it so the test stays offline
+    global.fetch = jest.fn(async () => ({ ok: false, status: 503 }));
     const toc = encodeTocField(1, 20000, [1000]);
     await rawRequest('POST', '/sdkrequest', buildMultipartRequest(toc));
     const cards = gallery.getAlbums();

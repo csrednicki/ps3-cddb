@@ -4,11 +4,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const log = require('./logger');
 const { loadConfig } = require('./config');
+const { openDb } = require('./db');
 const { decodeTocField } = require('./toc');
 const { queryCddbMatches, fetchCddbRecord, parseAlbum, getDiscId } = require('./cddb');
 
 const cfg = loadConfig();
-const CACHE_DIR = path.resolve(__dirname, "..", "..", cfg.gnudbCache.dir);
 const CACHE_TTL_MS = Math.max(0, cfg.gnudbCache.ttlSeconds * 1000);
 // gnudb can list many candidates for an ambiguous TOC - cap the per-candidate
 // detail fetches so one lookup can't fan out into an unbounded burst of requests.
@@ -146,98 +146,76 @@ function findAlbumByRawToc(rawTocHex) {
 }
 
 /**
- * Builds the on-disk cache filename stem "<discId>-<artist>-<title>" (without
- * extension), sanitizing artist/title to safe, length-capped path segments.
- * @param {string} discId - CDDB disc id (8 hex digits), the stable cache key
- * @param {string} artist - album artist, sanitized for use in a filename
- * @param {string} title - album title, sanitized for use in a filename
- * @returns {string} the cache filename stem
- */
-function cacheFileStem(discId, artist, title) {
-  const safe = (s) => String(s ?? '')
-    .replace(/[^\w .-]/g, '')
-    .trim()
-    .replace(/\s+/g, '_')
-    .slice(0, 60);
-  const suffix = `${safe(artist)}-${safe(title)}`;
-  return `${discId}-${suffix}`;
-}
-
-/**
- * Sweeps the disk cache and deletes every .txt entry whose age exceeds the
+ * Sweeps the gnudb record cache and deletes every entry older than the
  * configured TTL. Deferred via setImmediate so it never delays the response
  * that triggered it; readDiskCache() renews any entry it actively reuses, so
- * a file being asked about right now will not be caught by this sweep.
+ * a record being asked about right now will not be caught by this sweep.
  * @returns {void}
  */
 function purgeDiskCache() {
   setImmediate(() => {
+    const d = openDb();
+    if (!d) return;
     try {
-      for (const f of fs.readdirSync(CACHE_DIR)) {
-        if (!f.endsWith('.txt')) continue;
-        const full = path.join(CACHE_DIR, f);
-        try {
-          const { mtimeMs } = fs.statSync(full);
-          if (Date.now() - mtimeMs > CACHE_TTL_MS) {
-            fs.unlinkSync(full);
-            const expiredAt = new Date(mtimeMs + CACHE_TTL_MS).toISOString().slice(11, 19) + 'Z';
-            log.info(`[cache] purged: ${f} (expired at ${expiredAt})`);
-          }
-        } catch { /* file vanished mid-scan - ignore */ }
-      }
-    } catch { /* cache dir unreadable - ignore */ }
+      const cutoff = Date.now() - CACHE_TTL_MS;
+      const { changes } = d.prepare('DELETE FROM gnudb_cache WHERE fetched_at < ?').run(cutoff);
+      if (changes) log.info(`[cache] purged ${changes} expired record(s)`);
+    } catch (e) {
+      log.warn(`[cache] purge failed: ${e.message}`);
+    }
   });
 }
 
 /**
  * Reads the cached gnudb record for `discId`, if any. An entry past its TTL
- * is not treated as a miss: it is renewed (mtime bumped to now) and served
- * anyway, since the disc being asked about right now is exactly the one
+ * is not treated as a miss: it is renewed (fetched_at bumped to now) and
+ * served anyway, since the disc being asked about right now is exactly the one
  * purgeDiskCache() would otherwise delete.
  * @param {string} discId - CDDB disc id (8 hex digits)
  * @returns {{record: string, mtimeMs: number, file: string}|null} the cache hit, or null on a genuine miss
  */
 function readDiskCache(discId) {
+  const d = openDb();
+  if (!d) return null;
   try {
-    for (const f of fs.readdirSync(CACHE_DIR)) {
-      if (!f.startsWith(`${discId}-`) || !f.endsWith('.txt')) continue;
-      const full = path.join(CACHE_DIR, f);
-      const { mtimeMs } = fs.statSync(full);
-      const record = fs.readFileSync(full, 'utf8');
-      const now = Date.now();
-      if (now - mtimeMs > CACHE_TTL_MS) {
-        // Someone is asking about this exact disc right now - reuse what we
-        // have instead of both discarding it and re-hitting gnudb for data
-        // that almost certainly hasn't changed. Renewing the mtime also means
-        // a purgeDiskCache() sweep racing this read will see it as fresh and
-        // leave the file alone instead of deleting it out from under us.
-        fs.utimesSync(full, new Date(now), new Date(now));
-        log.info(`[cache] renewed: ${f} (was expired - reused instead of a fresh gnudb lookup)`);
-        return { record, mtimeMs: now, file: f };
-      }
-      return { record, mtimeMs, file: f };
+    const row = d.prepare('SELECT record, fetched_at FROM gnudb_cache WHERE disc_id = ?').get(discId);
+    if (!row) return null;
+    const now = Date.now();
+    if (now - row.fetched_at > CACHE_TTL_MS) {
+      // Someone is asking about this exact disc right now - reuse what we
+      // have instead of both discarding it and re-hitting gnudb for data
+      // that almost certainly hasn't changed. Renewing fetched_at also means
+      // a purgeDiskCache() sweep racing this read will see it as fresh and
+      // leave the row alone instead of deleting it out from under us.
+      d.prepare('UPDATE gnudb_cache SET fetched_at = ? WHERE disc_id = ?').run(now, discId);
+      log.info(`[cache] renewed: ${discId} (was expired - reused instead of a fresh gnudb lookup)`);
+      return { record: row.record, mtimeMs: now, file: discId };
     }
-  } catch { /* no cache dir / unreadable - treat as a miss */ }
-  return null;
+    return { record: row.record, mtimeMs: row.fetched_at, file: discId };
+  } catch (e) {
+    log.warn(`[cache] read failed: ${e.message}`);
+    return null;
+  }
 }
 
 /**
- * Persists a raw gnudb record to disk under its discId-derived filename.
- * Called by http-server after the response has been sent to the PS3, so the
- * write never delays the reply.
+ * Persists a raw gnudb record under its disc id. Called by http-server after
+ * the response has been sent to the PS3, so the write never delays the reply.
  * @param {string} discId - CDDB disc id (8 hex digits), the stable cache key
- * @param {string} artist - album artist, used only for a human-readable filename
- * @param {string} title - album title, used only for a human-readable filename
+ * @param {string} artist - album artist (unused; kept for call-site compatibility)
+ * @param {string} title - album title (unused; kept for call-site compatibility)
  * @param {string} record - raw gnudb record text to cache
  * @returns {void}
  */
 function writeDiskCache(discId, artist, title, record) {
+  const d = openDb();
+  if (!d) return;
   try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    const file = path.join(CACHE_DIR, `${cacheFileStem(discId, artist, title)}.txt`);
-    fs.writeFileSync(file, String(record), 'utf8');
+    d.prepare(`INSERT INTO gnudb_cache (disc_id, record, fetched_at) VALUES (?,?,?)
+      ON CONFLICT(disc_id) DO UPDATE SET record = excluded.record, fetched_at = excluded.fetched_at`)
+      .run(discId, String(record), Date.now());
     const expiresAt = new Date(Date.now() + CACHE_TTL_MS).toISOString().slice(11, 19) + 'Z';
-    log.info(`[cache] saved: ${path.basename(file)} (fresh until ${expiresAt})`);
+    log.info(`[cache] saved: ${discId} (fresh until ${expiresAt})`);
   } catch (e) {
     log.warn(`[cache] write failed: ${e.message}`);
   }

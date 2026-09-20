@@ -20,7 +20,6 @@ services:
       - "${HOST_IP}:53:53/tcp"
       - "${HOST_IP}:80:80/tcp"
     volumes:
-      # persist the gnudb album cache, request/response dumps and logs
-      - ./cache:/app/cache
+      - ./db:/app/db
       - ./dumps:/app/dumps
       - ./logs:/app/logs
