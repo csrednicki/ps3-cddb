@@ -49,32 +49,9 @@ Edit `api/config.json` before the first run:
 ```bash
 npm start
 ```
-
-<img width="1185" height="420" alt="Zrzut ekranu 2026-09-20 202711" src="https://github.com/user-attachments/assets/376a9b71-e561-4f90-acb6-abd607977288" />
+<img src="https://github.com/user-attachments/assets/415bb604-46c6-4232-a0ca-fc175773b2e9" />
 
 On Windows, run the terminal **as Administrator** (ports 53/80 are privileged on some setups); on Linux use `sudo` or `setcap`.
-
-### Test mode (fixed response)
-
-Set `GNUDB_TEST_RECORD` to answer **every** disc with the same gnudb record, without ever contacting gnudb. Only the `DISCID` line is rewritten to the disc id of the disc actually in the drive; all other fields (title, artist, year, genre, track titles) come from the file.
-
-```bash
-# bundled sample (api/samples/gnudb-sample.txt)
-GNUDB_TEST_RECORD=1 npm start
-
-# or your own raw gnudb record
-GNUDB_TEST_RECORD=./my-record.txt npm start
-```
-
-On Windows PowerShell:
-
-```powershell
-$env:GNUDB_TEST_RECORD="1"; npm start
-```
-
-This is useful for testing the PS3 response path (TLV records, slots, XMB display) with known data. The startup log confirms it with `[test] GNUDB_TEST_RECORD active`. Unset the variable to restore normal gnudb lookups.
-
-The record file is **re-read whenever it changes on disk** (checked per request via mtime/size), so you can edit `gnudb-sample.txt` while the server runs and the next disc will use the new data - no restart needed. The reload is logged as `[test] reloaded <file>`. If the file becomes unreadable mid-session, the last good record is kept and a warning is logged.
 
 ## Docker
 
@@ -109,12 +86,13 @@ Open `http://<host>/` in a browser to see every disc the console has looked up, 
 - **Cover art**: fetched once from [coverartarchive.org](https://coverartarchive.org/) and cached in the database, served locally from `GET /cover/<discId>` so the gallery still works if that service is unreachable later. Click a cover to open it full-size.
 - **Persistent**: every disc, its candidate matches, and cover art are stored in database.
 
-<img width="1461" height="1221" alt="Zrzut ekranu 2026-09-20 220236" src="https://github.com/user-attachments/assets/b081093b-2d17-4a1a-9390-4c8d97a451b7" />
+### Main page
 
-<img width="1457" height="1215" alt="Zrzut ekranu 2026-09-20 220252" src="https://github.com/user-attachments/assets/92ae3831-9297-4642-a7d7-208ef9e62d62" />
+<img src="https://github.com/user-attachments/assets/b081093b-2d17-4a1a-9390-4c8d97a451b7" />
 
+### CD metadata modal window
 
-
+<img src="https://github.com/user-attachments/assets/92ae3831-9297-4642-a7d7-208ef9e62d62" />
 
 ## Security
 
@@ -137,6 +115,28 @@ In short: these mitigations reduce casual/automated abuse, they do **not** turn 
 npm test
 ```
 
+### Test mode
+
+Set `GNUDB_TEST_RECORD` to answer **every** disc with the same gnudb record, without ever contacting gnudb. Only the `DISCID` line is rewritten to the disc id of the disc actually in the drive; all other fields (title, artist, year, genre, track titles) come from the file.
+
+```bash
+# bundled sample (api/samples/gnudb-sample.txt)
+GNUDB_TEST_RECORD=1 npm start
+
+# or your own raw gnudb record
+GNUDB_TEST_RECORD=./my-record.txt npm start
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:GNUDB_TEST_RECORD="1"; npm start
+```
+
+This is useful for testing the PS3 response path (TLV records, slots, XMB display) with known data. The startup log confirms it with `[test] GNUDB_TEST_RECORD active`. Unset the variable to restore normal gnudb lookups.
+
+The record file is **re-read whenever it changes on disk** (checked per request via mtime/size), so you can edit `gnudb-sample.txt` while the server runs and the next disc will use the new data - no restart needed. The reload is logged as `[test] reloaded <file>`. If the file becomes unreadable mid-session, the last good record is kept and a warning is logged.
+
 ## Project layout
 
 ```
@@ -154,6 +154,7 @@ logs/         Daily log files
 
 - Protocol details determined by the author and community through interoperability research on their own hardware.
 - Metadata provided by [gnudb](https://gnudb.org/) - please respect their usage policy.
+- Cover art provided by [coverartarchive.org](https://coverartarchive.org/) - please respect their usage policy.
 
 ## Disclaimer
 
