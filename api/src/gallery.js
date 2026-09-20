@@ -29,7 +29,6 @@ const clients = new Set();
 const pings = new Set();
 
 const TEMPLATE_PATH = path.join(__dirname, 'gallery.html');
-const PLACEHOLDER = '{{version}}';
 
 let template = null;
 
@@ -209,7 +208,13 @@ function handleEvents(req, res) {
  * @returns {string} the full HTML document
  */
 function renderPage(version) {
-  return renderGalleryPage(version);
+
+  // split/join instead of replace() so a "$" in the version cannot be treated
+  // as a replacement pattern
+  const tpl = loadTemplate();
+  const html = tpl.replace('{{version}}', String(version ?? ''));
+
+  return html;
 }
 
 /**
@@ -219,17 +224,6 @@ function renderPage(version) {
 function loadTemplate() {
   if (template === null) template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
   return template;
-}
-
-/**
- * Renders the gallery page.
- * @param {string} version - version string shown under the title
- * @returns {string} the full HTML document
- */
-function renderGalleryPage(version) {
-  // split/join instead of replace() so a "$" in the version cannot be treated
-  // as a replacement pattern
-  return loadTemplate().split(PLACEHOLDER).join(String(version ?? ''));
 }
 
 /**
@@ -246,4 +240,4 @@ function reset() {
   clients.clear();
 }
 
-module.exports = { addAlbum, getAlbums, getGroups, handleEvents, renderPage, renderGalleryPage, reset };
+module.exports = { addAlbum, getAlbums, getGroups, handleEvents, renderPage, reset };

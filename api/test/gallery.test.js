@@ -18,7 +18,7 @@ const gallery = require('../src/gallery');
 const fs = require('node:fs');
 const path = require('node:path');
 const TEMPLATE_PATH = path.join(__dirname, '..', 'src', 'gallery.html');
-const { renderGalleryPage } = require('../src/gallery');
+const { renderPage } = require('../src/gallery');
 
 /**
  * Minimal ServerResponse stand-in: records writes, is an EventEmitter (so the
@@ -239,56 +239,56 @@ describe('gallery.html template file', () => {
   });
 });
 
-describe('renderGalleryPage', () => {
+describe('renderPage', () => {
   it('should return a complete HTML document', () => {
-    const html = renderGalleryPage('1.1.0');
+    const html = renderPage('1.1.0');
     expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
     expect(html.trimEnd().endsWith('</html>')).toBe(true);
   });
 
   it('should show the title and the given version', () => {
-    const html = renderGalleryPage('2.3.4');
+    const html = renderPage('2.3.4');
     expect(html).toContain('<h1>PS3 CDDB proxy</h1>');
     expect(html).toContain('version 2.3.4');
   });
 
   it('should leave no placeholder behind', () => {
-    expect(renderGalleryPage('1.1.0')).not.toContain('{{version}}');
+    expect(renderPage('1.1.0')).not.toContain('{{version}}');
   });
 
   it('should treat a "$" in the version literally', () => {
     // split/join is used instead of replace() for exactly this reason
-    expect(renderGalleryPage('$1')).toContain('version $1');
+    expect(renderPage('$1')).toContain('version $1');
   });
 
   it('should tolerate a missing version', () => {
-    const html = renderGalleryPage();
+    const html = renderPage();
     expect(html).toContain('version ');
     expect(html).not.toContain('{{version}}');
   });
 
   it('should use a black background and white text', () => {
     // the template is pretty-printed, so compare with whitespace stripped
-    const css = renderGalleryPage('1.1.0').replace(/\s+/g, '');
+    const css = renderPage('1.1.0').replace(/\s+/g, '');
     expect(css).toContain('background:#000');
     expect(css).toContain('color:#fff');
   });
 
   it('should size the covers at 200x200', () => {
-    const css = renderGalleryPage('1.1.0').replace(/\s+/g, '');
+    const css = renderPage('1.1.0').replace(/\s+/g, '');
     expect(css).toContain('.cover{width:200px;height:200px');
     expect(css).toContain('.card{width:200px');
   });
 
   it('should subscribe to the SSE endpoint and handle both event types', () => {
-    const html = renderGalleryPage('1.1.0');
+    const html = renderPage('1.1.0');
     expect(html).toContain("new EventSource('/events')");
     expect(html).toContain("msg.type === 'snapshot'");
     expect(html).toContain("msg.type === 'update'");
   });
 
   it('should render the modal and the tab list containers', () => {
-    const html = renderGalleryPage('1.1.0');
+    const html = renderPage('1.1.0');
     expect(html).toContain('id="overlay"');
     expect(html).toContain('id="modal"');
     expect(html).toContain("tabs.className = 'tabs'");
@@ -296,23 +296,23 @@ describe('renderGalleryPage', () => {
   });
 
   it('should build every modal pane with the album metadata rows', () => {
-    const html = renderGalleryPage('1.1.0');
-    for (const label of ['Genre', 'Year', 'Disc ID', 'Source', 'Added']) {
+    const html = renderPage('1.1.0');
+    for (const label of ['Genre', 'Year', 'Added']) {
       expect(html).toContain(`['${label}'`);
     }
     expect(html).toContain("h3.textContent = 'Tracks ('");
   });
 
   it('should insert record data via textContent, never innerHTML', () => {
-    const html = renderGalleryPage('1.1.0');
+    const html = renderPage('1.1.0');
     expect(html).toContain('textContent');
     // innerHTML is only used to clear the modal, never to insert data
     expect(html).toContain("modal.innerHTML = ''");
   });
 
   it('should cache the template file after the first read', () => {
-    const first = renderGalleryPage('1.0.0');
-    const second = renderGalleryPage('1.0.0');
+    const first = renderPage('1.0.0');
+    const second = renderPage('1.0.0');
     expect(second).toBe(first);
   });
 });

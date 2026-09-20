@@ -362,9 +362,7 @@
                 var rows = [
                     ['Genre', a.genre],
                     ['Year', a.year],
-                    ['Disc ID', a.discId],
                     ['Disc', a.numDiscs > 1 ? a.discNumber + ' of ' + a.numDiscs : ''],
-                    ['Source', a.source],
                     ['Added', a.insertedAt ? new Date(a.insertedAt).toLocaleString() : ''],
                 ];
                 var dl = document.createElement('dl');
@@ -391,7 +389,7 @@
                         if (t.artist) {
                             var s = document.createElement('span');
                             s.className = 'dim';
-                            s.textContent = ' — ' + t.artist;
+                            s.textContent = ' - ' + t.artist;
                             li.appendChild(s);
                         }
                         if (t.duration) {
