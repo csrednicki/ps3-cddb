@@ -23,7 +23,7 @@ COPY api/config.json api/config.json
 RUN mkdir -p db dumps logs
 
 ENV NODE_ENV=production \
-    CDDB_LOG_COLOR=false
+    LOG_COLOR=false
 
 EXPOSE 53/udp 53/tcp 80/tcp
 
