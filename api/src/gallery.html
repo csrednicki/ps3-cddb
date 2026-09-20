@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PS3 CDDB proxy</title>
+    <style>
+        :root {
+            color-scheme: dark
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            background: #000;
+            color: #fff;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            min-height: 100vh
+        }
+
+        header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            padding: 16px 20px;
+            z-index: 10
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: .5px
+        }
+
+        header .ver {
+            font-size: 13px;
+            color: #9aa;
+            margin-top: 2px
+        }
+
+        main {
+            padding: 104px 24px 48px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 28px;
+            justify-content: center;
+            align-items: flex-start
+        }
+
+        .card {
+            width: 200px;
+            cursor: pointer;
+            text-align: center
+        }
+
+        .cover {
+            width: 200px;
+            height: 200px;
+            object-fit: cover;
+            display: block;
+            background: #555;
+            border-radius: 6px
+        }
+
+        .cover.ph {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ddd;
+            font-size: 13px;
+            padding: 8px;
+            text-align: center;
+            overflow: hidden
+        }
+
+        .meta {
+            margin-top: 8px;
+            font-size: 13px;
+            line-height: 1.35
+        }
+
+        .meta .artist {
+            color: #bbb
+        }
+
+        .meta .title {
+            color: #fff;
+            font-weight: 600
+        }
+
+        .meta .count {
+            color: #7fd4ff;
+            font-size: 11px;
+            margin-top: 2px
+        }
+
+        .empty {
+            color: #888;
+            font-size: 15px;
+            margin-top: 40px
+        }
+
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, .8);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            z-index: 20
+        }
+
+        .overlay.open {
+            display: flex
+        }
+
+        .modal {
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 10px;
+            max-width: 760px;
+            width: 100%;
+            max-height: 85vh;
+            overflow: auto;
+            padding: 24px;
+            position: relative
+        }
+
+        .modal h2 {
+            margin: 0 0 4px;
+            font-size: 20px
+        }
+
+        .modal h3 {
+            margin: 18px 0 6px;
+            font-size: 15px;
+            color: #ccc
+        }
+
+        .modal .sub {
+            color: #bbb;
+            margin-bottom: 16px
+        }
+
+        .modal .close {
+            position: absolute;
+            top: 10px;
+            right: 14px;
+            background: none;
+            border: 0;
+            color: #fff;
+            font-size: 26px;
+            cursor: pointer;
+            line-height: 1
+        }
+
+        .tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 0 0 14px;
+            padding-right: 36px
+        }
+
+        .tabs button {
+            background: #1c1c1c;
+            border: 1px solid #333;
+            color: #bbb;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            max-width: 220px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap
+        }
+
+        .tabs button:hover {
+            background: #262626;
+            color: #fff
+        }
+
+        .tabs button[aria-selected="true"] {
+            background: #2b2b2b;
+            border-color: #777;
+            color: #fff
+        }
+
+        .pane::after {
+            content: '';
+            display: block;
+            clear: both
+        }
+
+        .pane .cover-lg {
+            width: 200px;
+            height: 200px;
+            object-fit: cover;
+            border-radius: 6px;
+            background: #555;
+            float: right;
+            margin: 0 0 12px 16px
+        }
+
+        .pane .cover-lg.ph {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ddd;
+            font-size: 13px;
+            padding: 8px;
+            text-align: center;
+            overflow: hidden
+        }
+
+        dl {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 4px 12px;
+            margin: 0 0 8px
+        }
+
+        dt {
+            color: #888
+        }
+
+        dd {
+            margin: 0
+        }
+
+        ol.tracks {
+            margin: 0;
+            padding-left: 22px
+        }
+
+        ol.tracks li {
+            margin: 2px 0
+        }
+
+        ol.tracks .dim {
+            color: #999
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>PS3 CDDB proxy</h1>
+        <div class="ver">version {{version}}</div>
+    </header>
+    <main id="grid">
+        <div class="empty" id="empty">Waiting for a disc&hellip;</div>
+    </main>
+    <div class="overlay" id="overlay">
+        <div class="modal" id="modal"></div>
+    </div>
+    <script>
+        (function () {
+            var grid = document.getElementById('grid');
+            var empty = document.getElementById('empty');
+            var overlay = document.getElementById('overlay');
+            var modal = document.getElementById('modal');
+            var groups = new Map(); // discId -> group {albums:[...]}
+
+            function placeholder(a) {
+                var d = document.createElement('div');
+                d.className = 'cover ph';
+                d.textContent = a.title || 'No cover';
+                return d;
+            }
+
+            function coverNode(a, cls) {
+                if (!a.cover) {
+                    var ph = placeholder(a);
+                    ph.className = cls + ' ph';
+                    return ph;
+                }
+                var img = document.createElement('img');
+                img.className = cls;
+                img.src = a.cover;
+                img.alt = a.title || 'cover';
+                img.onerror = function () {
+                    var ph = placeholder(a);
+                    ph.className = cls + ' ph';
+                    img.replaceWith(ph);
+                };
+                return img;
+            }
+
+            function makeCard(group) {
+                var a = group.albums[0];
+                var el = document.createElement('div');
+                el.className = 'card';
+                var cover = coverNode(a, 'cover');
+                if (cover.tagName === 'IMG') cover.loading = 'lazy';
+                el.appendChild(cover);
+
+                var meta = document.createElement('div');
+                meta.className = 'meta';
+                var ar = document.createElement('div');
+                ar.className = 'artist';
+                ar.textContent = a.artist || 'Unknown artist';
+                var ti = document.createElement('div');
+                ti.className = 'title';
+                ti.textContent = a.title || 'Unknown album';
+                meta.appendChild(ar);
+                meta.appendChild(ti);
+                if (group.albums.length > 1) {
+                    var cnt = document.createElement('div');
+                    cnt.className = 'count';
+                    cnt.textContent = group.albums.length + ' versions';
+                    meta.appendChild(cnt);
+                }
+                el.appendChild(meta);
+                el.addEventListener('click', function () { openModal(group); });
+                return el;
+            }
+
+            function upsert(group) {
+                var old = groups.get(group.discId);
+                if (old) old.el.remove();
+                var el = makeCard(group);
+                group.el = el;
+                groups.set(group.discId, group);
+                grid.appendChild(el);
+                empty.style.display = 'none';
+            }
+
+            function applySnapshot(list) {
+                groups.forEach(function (g) { if (g.el) g.el.remove(); });
+                groups.clear();
+                list.forEach(upsert);
+                empty.style.display = list.length ? 'none' : 'block';
+            }
+
+            function fmt(s) {
+                var m = Math.floor(s / 60);
+                var r = s % 60;
+                return m + ':' + String(r).padStart(2, '0');
+            }
+
+            function buildPane(a) {
+                var pane = document.createElement('div');
+                pane.className = 'pane';
+                pane.appendChild(coverNode(a, 'cover-lg'));
+
+                var h = document.createElement('h2');
+                h.textContent = a.title || 'Unknown album';
+                pane.appendChild(h);
+                var sub = document.createElement('div');
+                sub.className = 'sub';
+                sub.textContent = a.artist || 'Unknown artist';
+                pane.appendChild(sub);
+
+                var rows = [
+                    ['Genre', a.genre],
+                    ['Year', a.year],
+                    ['Disc ID', a.discId],
+                    ['Disc', a.numDiscs > 1 ? a.discNumber + ' of ' + a.numDiscs : ''],
+                    ['Source', a.source],
+                    ['Added', a.insertedAt ? new Date(a.insertedAt).toLocaleString() : ''],
+                ];
+                var dl = document.createElement('dl');
+                rows.forEach(function (row) {
+                    if (!row[1]) return;
+                    var dt = document.createElement('dt');
+                    dt.textContent = row[0];
+                    var dd = document.createElement('dd');
+                    dd.textContent = row[1];
+                    dl.appendChild(dt);
+                    dl.appendChild(dd);
+                });
+                pane.appendChild(dl);
+
+                if (a.tracks && a.tracks.length) {
+                    var h3 = document.createElement('h3');
+                    h3.textContent = 'Tracks (' + a.tracks.length + ')';
+                    pane.appendChild(h3);
+                    var ol = document.createElement('ol');
+                    ol.className = 'tracks';
+                    a.tracks.forEach(function (t) {
+                        var li = document.createElement('li');
+                        li.textContent = t.title || '(untitled)';
+                        if (t.artist) {
+                            var s = document.createElement('span');
+                            s.className = 'dim';
+                            s.textContent = ' — ' + t.artist;
+                            li.appendChild(s);
+                        }
+                        if (t.duration) {
+                            var d = document.createElement('span');
+                            d.className = 'dim';
+                            d.textContent = ' (' + fmt(t.duration) + ')';
+                            li.appendChild(d);
+                        }
+                        ol.appendChild(li);
+                    });
+                    pane.appendChild(ol);
+                }
+                return pane;
+            }
+
+            function openModal(group) {
+                modal.innerHTML = '';
+                var close = document.createElement('button');
+                close.className = 'close';
+                close.textContent = '×';
+                close.onclick = closeModal;
+                modal.appendChild(close);
+
+                var list = group.albums;
+                var panes = [];
+                if (list.length > 1) {
+                    var tabs = document.createElement('div');
+                    tabs.className = 'tabs';
+                    tabs.setAttribute('role', 'tablist');
+                    list.forEach(function (a, i) {
+                        var b = document.createElement('button');
+                        b.type = 'button';
+                        b.textContent = (a.title || 'Unknown album') + (a.cover ? ' ✓' : '');
+                        b.title = a.title || 'Unknown album';
+                        b.addEventListener('click', function () { select(i); });
+                        tabs.appendChild(b);
+                    });
+                    modal.appendChild(tabs);
+                }
+                list.forEach(function (a) {
+                    var pane = buildPane(a);
+                    pane.style.display = 'none';
+                    modal.appendChild(pane);
+                    panes.push(pane);
+                });
+
+                function select(i) {
+                    panes.forEach(function (p, j) { p.style.display = j === i ? 'block' : 'none'; });
+                    var btns = modal.querySelectorAll('.tabs button');
+                    btns.forEach(function (b, j) { b.setAttribute('aria-selected', j === i ? 'true' : 'false'); });
+                }
+                select(0);
+                overlay.classList.add('open');
+            }
+
+            function closeModal() { overlay.classList.remove('open'); }
+            overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(); });
+            document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeModal(); });
+
+            var es = new EventSource('/events');
+            es.onmessage = function (e) {
+                var msg;
+                try { msg = JSON.parse(e.data); } catch (err) { return; }
+                if (msg.type === 'snapshot') applySnapshot(msg.groups || []);
+                else if (msg.type === 'update' && msg.group) upsert(msg.group);
+            };
+        })();
+    </script>
+</body>
+
+</html>

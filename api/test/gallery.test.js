@@ -15,6 +15,10 @@ jest.mock('../src/logger', () => ({
 
 const { EventEmitter } = require('node:events');
 const gallery = require('../src/gallery');
+const fs = require('node:fs');
+const path = require('node:path');
+const TEMPLATE_PATH = path.join(__dirname, '..', 'src', 'gallery.html');
+const { renderGalleryPage } = require('../src/gallery');
 
 /**
  * Minimal ServerResponse stand-in: records writes, is an EventEmitter (so the
@@ -202,7 +206,13 @@ describe('gallery.renderPage', () => {
     expect(html).toContain('PS3 CDDB proxy');
     expect(html).toContain('version 1.1.0');
     expect(html).toContain("new EventSource('/events')");
-    expect(html).toContain('background:#000');
+    expect(html.replace(/\s+/g, '')).toContain('background:#000');
+  });
+
+  it('should render a complete HTML document', () => {
+    const html = gallery.renderPage('9.9.9');
+    expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
+    expect(html.trimEnd().endsWith('</html>')).toBe(true);
   });
 });
 
@@ -214,5 +224,95 @@ describe('gallery.reset', () => {
     gallery.reset();
     expect(gallery.getAlbums()).toHaveLength(0);
     expect(res.end).toHaveBeenCalled();
+  });
+});
+
+describe('gallery.html template file', () => {
+  it('should exist next to the loader', () => {
+    expect(fs.existsSync(TEMPLATE_PATH)).toBe(true);
+  });
+
+  it('should not contain any JavaScript template-literal interpolation', () => {
+    const raw = fs.readFileSync(TEMPLATE_PATH, 'utf8');
+    expect(raw).not.toContain('${');
+    expect(raw).toContain('{{version}}');
+  });
+});
+
+describe('renderGalleryPage', () => {
+  it('should return a complete HTML document', () => {
+    const html = renderGalleryPage('1.1.0');
+    expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
+    expect(html.trimEnd().endsWith('</html>')).toBe(true);
+  });
+
+  it('should show the title and the given version', () => {
+    const html = renderGalleryPage('2.3.4');
+    expect(html).toContain('<h1>PS3 CDDB proxy</h1>');
+    expect(html).toContain('version 2.3.4');
+  });
+
+  it('should leave no placeholder behind', () => {
+    expect(renderGalleryPage('1.1.0')).not.toContain('{{version}}');
+  });
+
+  it('should treat a "$" in the version literally', () => {
+    // split/join is used instead of replace() for exactly this reason
+    expect(renderGalleryPage('$1')).toContain('version $1');
+  });
+
+  it('should tolerate a missing version', () => {
+    const html = renderGalleryPage();
+    expect(html).toContain('version ');
+    expect(html).not.toContain('{{version}}');
+  });
+
+  it('should use a black background and white text', () => {
+    // the template is pretty-printed, so compare with whitespace stripped
+    const css = renderGalleryPage('1.1.0').replace(/\s+/g, '');
+    expect(css).toContain('background:#000');
+    expect(css).toContain('color:#fff');
+  });
+
+  it('should size the covers at 200x200', () => {
+    const css = renderGalleryPage('1.1.0').replace(/\s+/g, '');
+    expect(css).toContain('.cover{width:200px;height:200px');
+    expect(css).toContain('.card{width:200px');
+  });
+
+  it('should subscribe to the SSE endpoint and handle both event types', () => {
+    const html = renderGalleryPage('1.1.0');
+    expect(html).toContain("new EventSource('/events')");
+    expect(html).toContain("msg.type === 'snapshot'");
+    expect(html).toContain("msg.type === 'update'");
+  });
+
+  it('should render the modal and the tab list containers', () => {
+    const html = renderGalleryPage('1.1.0');
+    expect(html).toContain('id="overlay"');
+    expect(html).toContain('id="modal"');
+    expect(html).toContain("tabs.className = 'tabs'");
+    expect(html).toContain("tabs.setAttribute('role', 'tablist')");
+  });
+
+  it('should build every modal pane with the album metadata rows', () => {
+    const html = renderGalleryPage('1.1.0');
+    for (const label of ['Genre', 'Year', 'Disc ID', 'Source', 'Added']) {
+      expect(html).toContain(`['${label}'`);
+    }
+    expect(html).toContain("h3.textContent = 'Tracks ('");
+  });
+
+  it('should insert record data via textContent, never innerHTML', () => {
+    const html = renderGalleryPage('1.1.0');
+    expect(html).toContain('textContent');
+    // innerHTML is only used to clear the modal, never to insert data
+    expect(html).toContain("modal.innerHTML = ''");
+  });
+
+  it('should cache the template file after the first read', () => {
+    const first = renderGalleryPage('1.0.0');
+    const second = renderGalleryPage('1.0.0');
+    expect(second).toBe(first);
   });
 });
