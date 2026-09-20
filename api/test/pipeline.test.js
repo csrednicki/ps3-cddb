@@ -49,12 +49,13 @@ describe('BIN header (buildBinHeader)', () => {
 describe('Synthetic request → response (roundtrip)', () => {
   it('should roundtrip the TOC field through encodeTocField/decodeTocField', () => {
     const nTracks = 3;
-    const leadOut = 20000;
-    const offsets = [1000, 5000, 9000];
-    const field = encodeTocField(nTracks, leadOut, offsets);
+    const lengths = [1000, 2000, 3000];
+    const start = 0;
+    const leadOut = start + lengths.reduce((a, b) => a + b, 0) - 1;
+    const field = encodeTocField(nTracks, leadOut, lengths, start);
     const dec = require('../src/toc').decodeTocField(field);
     expect(dec.nTracks).toBe(nTracks);
-    expect(dec.values.map(Number)).toEqual([leadOut, ...offsets]);
+    expect(dec.values.map(Number)).toEqual([leadOut, start, ...lengths]);
   });
 
   it('should emit a single ALBUM record readable by the TLV reader', () => {
@@ -84,26 +85,28 @@ describe('Synthetic request → response (roundtrip)', () => {
     expect(txt(1)).toBe('Sample Sounds');       // Album
     expect(txt(4)).toBe('Test Artist');         // Artist
     expect(txt(9)).toBe('Pop');                 // Genre
-    expect(slots[6].readUInt16LE(0)).toBe(2);   // track count
+    expect(slots[6].readUInt16LE(0)).toBe(2);   // track count (unused by firmware)
     expect(slots[7].readUInt16LE(0)).toBe(1);
-    expect(slots[11].readUInt16LE(0)).toBe(1);  // Disc Number (2nd half)
-    expect(slots[28].readUInt16LE(0)).toBe(0);
-    expect(slots[29].readUInt16LE(0)).toBe(7);  // track view (>6)
+    expect(slots[11].readUInt16LE(0)).toBe(1);  // total discs in set
+    expect(slots[28].readUInt16LE(0)).toBe(0);  // language code (none)
+    expect(slots[29].readUInt16LE(0)).toBe(7);  // acceptance threshold (> 6)
     // hard-lock slots: must be ABSENT (0 bytes)
     for (const s of [10, 13, 14, 16, 17, 18, 21, 24, 25]) {
       expect(slots[s].length).toBe(0);
     }
-    // empty-string slots: exactly 1 NUL byte
-    for (const s of [0, 2, 3, 5, 8, 12, 19, 20, 26, 27]) {
+    // present-but-empty string slots: exactly 1 NUL byte
+    for (const s of [0, 2, 5, 12, 19, 20, 26, 27]) {
       expect(slots[s].length).toBe(1);
       expect(slots[s][0]).toBe(0);
     }
-    // track-group in slot 15: CONTAINER(group) → [trackList, i16(1), i16(N)]
+    // non-compilation: slot 3 must be absent (not "VA")
+    expect(slots[3].length).toBe(0);
+    // track-group in slot 15: CONTAINER(group) → [trackList, discNumber, discLength]
     const group = readContainer(readContainer(buf)[15])[0];
     const g = readContainer(group);
     expect(g.length).toBe(3);
-    expect(g[1].readUInt16LE(0)).toBe(1);
-    expect(g[2].readUInt16LE(0)).toBe(2);
+    expect(g[1].readUInt16LE(0)).toBe(1);      // disc number
+    expect(g[2].readUInt16LE(0)).toBe(0);      // disc length [s] unknown → 0
     const trackList = readContainer(g[0]);
     expect(trackList.length).toBe(2);
     const t0 = readContainer(trackList[0]);

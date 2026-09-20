@@ -9,6 +9,7 @@ services:
     environment:
       - HOST_IP=${HOST_IP:?Set HOST_IP to your LAN IP, e.g. 192.168.1.10}
       # - LOG_LEVEL=debug
+      # - GNUDB_TEST_RECORD=1
     ports:
       # DNS (UDP + TCP) and HTTP - bound to the host's HOST_IP interface
       # rather than every interface Docker can see (e.g. its internal bridge
@@ -19,7 +20,6 @@ services:
       - "${HOST_IP}:53:53/tcp"
       - "${HOST_IP}:80:80/tcp"
     volumes:
-      # persist the gnudb album cache, request/response dumps and logs
-      - ./cache:/app/cache
+      - ./db:/app/db
       - ./dumps:/app/dumps
       - ./logs:/app/logs

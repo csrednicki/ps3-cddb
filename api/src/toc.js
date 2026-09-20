@@ -45,46 +45,58 @@ function encodedSize(value, threeDigitFlag) {
 }
 
 /**
- * Builds a full TOC field: track count byte, then the leadout (fixed 3
- * digits) and each track's frame offset. Mirrors the PS3's wire format -
- * mainly used by tests to construct requests without a real disc.
- * @param {number} nTracks - number of tracks on the disc
- * @param {number} leadOut - leadout position (frames)
- * @param {number[]} offsets - per-track frame offsets
+ * Builds a full TOC field: track count byte, then the END (fixed 3 digits),
+ * START and each track's length. Mirrors the PS3's wire format - mainly used by
+ * tests to construct requests without a real disc.
+ * @param {number} nTracks - number of audio tracks on the disc
+ * @param {number} leadOut - END position (frames)
+ * @param {number[]} lengths - per-track lengths (frames)
+ * @param {number} [start=0] - START (first track position, frames)
  * @returns {Buffer} the encoded TOC field
  */
-function encodeTocField(nTracks, leadOut, offsets) {
-  const sizes = 1 + encodedSize(leadOut, 1) + offsets.reduce((s, o) => s + encodedSize(o, 0), 0);
+function encodeTocField(nTracks, leadOut, lengths, start = 0) {
+  const values = [start, ...lengths];
+  const sizes = 1 + 3 + values.reduce((s, o) => s + encodedSize(o, 0), 0);
   const buf = Buffer.alloc(sizes);
   let pos = 0;
   buf[pos++] = nTracks + DIGIT_OFFSET;
   pos += encodeValue(buf, pos, leadOut, 1);
-  for (const o of offsets) {
+  for (const o of values) {
     pos += encodeValue(buf, pos, o, 0);
   }
   return buf;
 }
 
 /**
- * Decodes a raw PS3 TOC field into the track count and a values array
- * (leadout followed by each track's frame offset, in the on-disc encoding).
+ * Decodes a raw PS3 TOC field into the track count and a values array.
+ *
+ * Layout: `[N][END: 3 digits][START][L_1]…[L_N]`, i.e. END followed by
+ * nTracks+1 values (START plus one length per audio track). `values` therefore
+ * has nTracks+2 entries: values[0] = END (lead-out), values[1] = START,
+ * values[2..] = per-track lengths. The END field is always exactly 3 digits.
+ * The byte budget ends the loop early for a truncated field.
  * @param {Buffer} buf - raw TOC field bytes from the request
  * @returns {{nTracks: number, values: number[]}} decoded TOC
- * @throws {Error} when `buf` is too short to contain a track count byte
+ * @throws {Error} when `buf` is too short to contain the track count or lead-out
  */
 function decodeTocField(buf) {
   if (buf.length < 1) throw new Error('TOC field too short');
   const nTracks = buf[0] - DIGIT_OFFSET;
+  if (nTracks < 0) throw new Error('invalid track count');
   let pos = 1;
+  if (pos + 3 > buf.length) throw new Error('TOC field too short');
 
   const leadOut =
     (buf[pos] - DIGIT_OFFSET) * B2 +
     (buf[pos + 1] - DIGIT_OFFSET) * DIGIT_BASE +
     (buf[pos + 2] - DIGIT_OFFSET);
   pos += 3;
+
   const values = [leadOut];
-  for (let t = 0; t < nTracks; t++) {
+  for (let t = 0; t <= nTracks; t++) {
+    if (pos + 2 > buf.length) break;
     if (buf[pos] === 0xff) {
+      if (pos + 4 > buf.length) break;
       values.push(
         (buf[pos + 1] - DIGIT_OFFSET) * B2 +
           (buf[pos + 2] - DIGIT_OFFSET) * DIGIT_BASE +
@@ -103,16 +115,17 @@ function decodeTocField(buf) {
 
 /**
  * Total byte size a TOC field built from these values would occupy, without building it.
- * @param {number} nTracks - number of tracks on the disc
- * @param {number} leadOut - leadout position (frames)
- * @param {number[]} offsets - per-track frame offsets
+ * @param {number} nTracks - number of audio tracks on the disc
+ * @param {number} leadOut - END position (frames)
+ * @param {number[]} lengths - per-track lengths (frames)
+ * @param {number} [start=0] - START (first track position, frames)
  * @returns {number} total encoded size in bytes
  */
-function tocFieldSize(nTracks, leadOut, offsets) {
+function tocFieldSize(nTracks, leadOut, lengths, start = 0) {
   return (
     1 +
-    encodedSize(leadOut, 1) +
-    offsets.reduce((s, o) => s + encodedSize(o, 0), 0)
+    3 +
+    [start, ...lengths].reduce((s, o) => s + encodedSize(o, 0), 0)
   );
 }
 

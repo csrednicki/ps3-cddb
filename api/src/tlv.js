@@ -94,15 +94,6 @@ function writeStr(s) {
 }
 
 /**
- * Encodes a year as plain ASCII digits, no NUL terminator (matches PS3 ground-truth captures).
- * @param {*} year - value to stringify (null/undefined become "0")
- * @returns {Buffer} the ASCII-encoded year
- */
-function writeYear(year) {
-  return Buffer.from(`${year ?? '0'}`, 'ascii');
-}
-
-/**
  * u16 LE (emitI16).
  * @param {number} v - value to encode (masked to 16 bits)
  * @returns {Buffer} 2-byte little-endian buffer
@@ -132,6 +123,5 @@ module.exports = {
   readContainer,
   writeStr,
   writeI16,
-  writeI32,
-  writeYear
+  writeI32
 };

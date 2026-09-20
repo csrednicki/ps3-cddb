@@ -198,7 +198,20 @@ describe('parseAlbum', () => {
     expect(rec.albumArtist).toBe('Test Artist');
     expect(rec.albumTitle).toBe('Sample Sounds');
     expect(rec.albumGenre).toBe('Pop');
-    expect(rec.tracks).toEqual([{ title: 'Sample Sounds' }, { title: 'Second Track' }]);
+    expect(rec.tracks).toEqual([{ title: 'Sample Sounds', artist: '' }, { title: 'Second Track', artist: '' }]);
+  });
+
+  it('should split a per-track "Artist / Title" TTITLE into artist and title', () => {
+    const rec = parseAlbum('DTITLE=Album Artist / Album\nTTITLE0=Some other artist / Simple Title\nTTITLE1=Another artist / Radio Edit\n');
+    expect(rec.tracks).toEqual([
+      { title: 'Simple Title', artist: 'Some other artist' },
+      { title: 'Radio Edit', artist: 'Another artist' },
+    ]);
+  });
+
+  it('should leave a per-track artist empty when a TTITLE has no " / " separator', () => {
+    const rec = parseAlbum('DTITLE=A / B\nTTITLE0=Plain Title\n');
+    expect(rec.tracks).toEqual([{ title: 'Plain Title', artist: '' }]);
   });
 
   it('should leave the artist empty when DTITLE has no " / " separator', () => {
@@ -233,22 +246,122 @@ describe('parseAlbum', () => {
     expect(rec.albumArtist).toBe('Artist');
     expect(rec.albumTitle).toBe('Title');
     expect(rec.albumGenre).toBe('Jazz');
-    expect(rec.tracks).toEqual([{ title: '  ' }]); // TTITLE is not trimmed
+    expect(rec.tracks).toEqual([{ title: '  ', artist: '' }]); // TTITLE is not trimmed
   });
 
   it('should keep the first TTITLE occurrence for a duplicated index', () => {
     const rec = parseAlbum('DTITLE=A / B\nTTITLE0=First\nTTITLE0=Second\n');
-    expect(rec.tracks).toEqual([{ title: 'First' }]);
+    expect(rec.tracks).toEqual([{ title: 'First', artist: '' }]);
   });
 
   it('should raise the track count only for the highest seen index', () => {
     const rec = parseAlbum('DTITLE=A / B\nTTITLE2=C\nTTITLE0=A\n');
-    expect(rec.tracks).toEqual([{ title: 'A' }, { title: '' }, { title: 'C' }]);
+    expect(rec.tracks).toEqual([{ title: 'A', artist: '' }, { title: '', artist: '' }, { title: 'C', artist: '' }]);
   });
 
   it('should limit tracked TTITLE indices to maxTracks', () => {
     const rec = parseAlbum('DTITLE=A / B\nTTITLE0=X\nTTITLE5=Y\n', 3);
     expect(rec.tracks.length).toBe(1); // only index 0 < 3
+  });
+
+  it('should split a Various TTITLE on " - " before the bare "/"', () => {
+    // "Queen/David Bowie - Under Pressure": the dash wins, so the artist keeps its "/"
+    const rec = parseAlbum('DTITLE=Various / Hits\nTTITLE0=Queen/David Bowie - Under Pressure\nTTITLE1=Simple Artist / Song\n');
+    expect(rec.tracks).toEqual([
+      { title: 'Under Pressure', artist: 'Queen/David Bowie' },
+      { title: 'Song', artist: 'Simple Artist' },
+    ]);
+  });
+
+  it('should split a Various TTITLE on a bare "/" only when it is the single one', () => {
+    const rec = parseAlbum('DTITLE=Various / Hits\nTTITLE0=AC/DC/Back in Black\n');
+    expect(rec.tracks).toEqual([{ title: 'AC/DC/Back in Black', artist: '' }]); // two "/" → no split
+  });
+
+  it('should not split a Various TTITLE that has no separator at all', () => {
+    const rec = parseAlbum('DTITLE=Various / Hits\nTTITLE0=Just A Title\n');
+    expect(rec.tracks).toEqual([{ title: 'Just A Title', artist: '' }]);
+  });
+
+  it('should prefer the " / " separator for a Various TTITLE when present', () => {
+    const rec = parseAlbum('DTITLE=Various Artists / Hits\nTTITLE0=AC/DC / Back in Black\n');
+    expect(rec.tracks).toEqual([{ title: 'Back in Black', artist: 'AC/DC' }]);
+  });
+
+  it('should require the " / " separator for a non-Various album (so "AC/DC" stays a title)', () => {
+    const rec = parseAlbum('DTITLE=AC/DC / Back in Black\nTTITLE0=Hells Bells\n');
+    expect(rec.tracks).toEqual([{ title: 'Hells Bells', artist: '' }]);
+  });
+
+  it('should parse the "# Track frame offsets:" and "# Leadout:" comments', () => {
+    const rec = parseAlbum([
+      '# Track frame offsets:',
+      '#     150',
+      '#     8333',
+      '#     25066',
+      '#',
+      '# Disc length: 3003 seconds',
+      '# Leadout: 225171',
+      '#',
+      'DTITLE=A / B',
+      'TTITLE0=T',
+    ].join('\n'));
+    expect(rec.albumFrameOffsets).toEqual([150, 8333, 25066]);
+    expect(rec.albumLeadout).toBe(225171);
+  });
+
+  it('should fall back to "# Disc length: N seconds" × 75 when "# Leadout:" is absent', () => {
+    const rec = parseAlbum('# Disc length: 3003 seconds\nDTITLE=A / B\nTTITLE0=T\n');
+    expect(rec.albumDiscLength).toBe(3003);
+    expect(rec.albumLeadout).toBe(3003 * 75);
+  });
+
+  it('should prefer "# Leadout:" over "# Disc length:" when both are present', () => {
+    const rec = parseAlbum('# Disc length: 3003 seconds\n# Leadout: 225171\nDTITLE=A / B\n');
+    expect(rec.albumLeadout).toBe(225171);
+  });
+
+  it('should leave frame offsets empty and leadout null when the comments are absent', () => {
+    const rec = parseAlbum('DTITLE=A / B\nTTITLE0=T\n');
+    expect(rec.albumFrameOffsets).toEqual([]);
+    expect(rec.albumLeadout).toBeNull();
+  });
+
+  it('should not pick up unrelated "#" comment lines as offsets or leadout', () => {
+    const rec = parseAlbum('# xmcd\n#\n# Revision: 0\n# Artid: abc\n# Cover: https://x/1\nDTITLE=A / B\n');
+    expect(rec.albumFrameOffsets).toEqual([]);
+    expect(rec.albumLeadout).toBeNull();
+  });
+
+  it('should parse the "# Cover:" and "# Artid:" comments', () => {
+    const rec = parseAlbum([
+      '# Cover: https://coverartarchive.org/release/62b7cd8d-ff04-4e8b-a615-6fab903535bd/23655914879-500.jpg',
+      '# Artid: 62b7cd8d-ff04-4e8b-a615-6fab903535bd',
+      'DTITLE=A / B',
+      'TTITLE0=T',
+    ].join('\n'));
+    expect(rec.albumCover).toBe('https://coverartarchive.org/release/62b7cd8d-ff04-4e8b-a615-6fab903535bd/23655914879-500.jpg');
+    expect(rec.albumArtid).toBe('62b7cd8d-ff04-4e8b-a615-6fab903535bd');
+  });
+
+  it('should keep only the first "# Cover:" when the record carries several', () => {
+    const rec = parseAlbum('# Cover: https://x/1.jpg\n# Cover: https://x/2.jpg\nDTITLE=A / B\n');
+    expect(rec.albumCover).toBe('https://x/1.jpg');
+  });
+
+  it('should leave albumCover and albumArtid empty when the comments are absent', () => {
+    const rec = parseAlbum('DTITLE=A / B\nTTITLE0=T\n');
+    expect(rec.albumCover).toBe('');
+    expect(rec.albumArtid).toBe('');
+  });
+
+  it('should parse DISCID into albumDiscId and keep only the first occurrence', () => {
+    const rec = parseAlbum('DISCID=b40bb90f\nDISCID=deadbeef\nDTITLE=A / B\n');
+    expect(rec.albumDiscId).toBe('b40bb90f');
+  });
+
+  it('should leave albumDiscId empty when there is no DISCID line', () => {
+    expect(parseAlbum('DTITLE=A / B\n').albumDiscId).toBe('');
   });
 });
 

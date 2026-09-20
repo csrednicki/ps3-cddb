@@ -141,17 +141,55 @@ function parseMatches(reply) {
 
 /**
  * Parses a gnudb "read" record's DTITLE/DYEAR/DGENRE/TTITLE lines into an album.
+ * A TTITLE may carry a per-track artist as "Artist / Title" (the same separator
+ * as DTITLE); when present it is split out into the track's `artist`.
+ *
+ * For a "Various / Album" disc the freedb convention is
+ * `TTITLEn=Artist / Title`, so the split is done on the FIRST "/" (tolerating
+ * missing spaces) to match the convention; otherwise the stricter " / "
+ * separator is required, so a title like "AC/DC" is not mistaken for an artist.
+ *
+ * The record's `# Track frame offsets:` and `# Leadout:` comments are parsed
+ * into `albumFrameOffsets` / `albumLeadout` (frames) so the server can align
+ * tracks with the physical disc without relying on request offsets.
+ *
+ * The `# Cover:` comment (a coverartarchive.org URL) and the `# Artid:`
+ * comment (the MusicBrainz release id) are parsed into `albumCover` /
+ * `albumArtid` so the gallery page can show the album art. gnudb records may
+ * carry several `# Cover:` lines (one per art id); the first one wins.
  * @param {string} text - raw gnudb record text
  * @param {number} [maxTracks=99] - highest TTITLE index to accept (out-of-range indices are ignored)
- * @returns {{albumArtist: string, albumTitle: string, albumGenre: string, albumYear: string, albumDisc: number, tracks: Array<{title: string}>}}
+ * @returns {{albumArtist: string, albumTitle: string, albumGenre: string, albumYear: string, albumDiscId: string, albumDisc: number, albumFrameOffsets: number[], albumLeadout: number|null, albumCover: string, albumArtid: string, tracks: Array<{title: string, artist: string}>}}
  */
 function parseAlbum(text, maxTracks = 99) {
-  const album = { albumArtist: '', albumTitle: '', albumGenre: '', albumYear: '', albumDisc: 0, tracks: [] };
+  const album = {
+    albumArtist: '', albumTitle: '', albumGenre: '', albumYear: '', albumDiscId: '',
+    albumDisc: 0, albumFrameOffsets: [], albumLeadout: null, albumDiscLength: null,
+    albumCover: '', albumArtid: '', tracks: [],
+  };
   const titles = new Array(maxTracks).fill('');
   let highest = -1;
+  let inOffsets = false;
 
   for (const rawLine of String(text).split(/\r?\n/)) {
     const line = rawLine;
+    if (line.startsWith('# Track frame offsets:')) { inOffsets = true; continue; }
+    if (inOffsets) {
+      const om = line.match(/^#\s+(\d+)\s*$/);
+      if (om) { album.albumFrameOffsets.push(parseInt(om[1], 10)); continue; }
+      inOffsets = false;
+    }
+    if (line.startsWith('#')) {
+      const lm = line.match(/^#\s*Leadout:\s*(\d+)/);
+      if (lm) album.albumLeadout = parseInt(lm[1], 10);
+      const dm = line.match(/^#\s*Disc length:\s*(\d+)/);
+      if (dm) album.albumDiscLength = parseInt(dm[1], 10);
+      const cm = line.match(/^#\s*Cover:\s*(\S+)/);
+      if (cm && !album.albumCover) album.albumCover = cm[1];
+      const am = line.match(/^#\s*Artid:\s*(\S+)/);
+      if (am && !album.albumArtid) album.albumArtid = am[1];
+      continue;
+    }
     if (line.startsWith('DTITLE=') && !album.albumTitle) {
       const value = line.slice(7);
       const sep = value.indexOf(' / ');
@@ -161,6 +199,8 @@ function parseAlbum(text, maxTracks = 99) {
       } else {
         album.albumTitle = value;
       }
+    } else if (line.startsWith('DISCID=') && !album.albumDiscId) {
+      album.albumDiscId = line.slice(7).trim();
     } else if (line.startsWith('DYEAR=') && !album.albumYear) {
       album.albumYear = line.slice(6).trim();
     } else if (line.startsWith('DGENRE=') && !album.albumGenre) {
@@ -177,8 +217,39 @@ function parseAlbum(text, maxTracks = 99) {
     }
   }
 
+  // "Various / Album" discs carry the per-track artist in each TTITLE. Prefer
+  // the unambiguous " / " separator, then " - ", and fall back to a bare "/"
+  // only when there is exactly one (so "AC/DC - Thunderstruck" splits on the
+  // dash, not on the slash inside the artist name).
+  const various = /^various/i.test(album.albumArtist.trim());
   const n = highest + 1;
-  for (let i = 0; i < n; i++) album.tracks.push({ title: titles[i] || '' });
+  for (let i = 0; i < n; i++) {
+    const raw = titles[i] || '';
+    let sep = -1;
+    let delim = 0;
+    if (various) {
+      const spaced = raw.indexOf(' / ');
+      const dash = raw.indexOf(' - ');
+      const slash = raw.indexOf('/');
+      if (spaced !== -1) { sep = spaced; delim = 3; }
+      else if (dash !== -1) { sep = dash; delim = 3; }
+      else if (slash !== -1 && raw.indexOf('/', slash + 1) === -1) { sep = slash; delim = 1; }
+    } else {
+      sep = raw.indexOf(' / ');
+      delim = 3;
+    }
+    // per-track artist ("Artist / Title") when present, otherwise empty and the
+    // album artist is used as the fallback by the record builder
+    const artist = sep !== -1 ? raw.slice(0, sep).trim() : '';
+    const title = sep !== -1 ? raw.slice(sep + delim).trim() : raw;
+    album.tracks.push({ title, artist });
+  }
+  // Some records omit "# Leadout:" but carry "# Disc length: N seconds"; the
+  // freedb disc length is measured from zero including the 2 s lead-in, so the
+  // lead-out in frames is N × 75.
+  if (album.albumLeadout == null && album.albumDiscLength > 0) {
+    album.albumLeadout = album.albumDiscLength * 75;
+  }
   album.albumArtist = album.albumArtist.trim();
   album.albumTitle = album.albumTitle.trim();
   album.albumGenre = album.albumGenre.trim();

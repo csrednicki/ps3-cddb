@@ -2,7 +2,7 @@
 
 # PS3 CDDB Proxy
 
-This project is a local proxy that **brings back online album metadata for audio CDs** played on the PS3 gaming console. It works by intercepting the PS3's metadata requests and answering them with data from [gnudb](https://gnudb.org/). The original metadata service was discontinued in early 2019, so without this proxy the console can no longer fetch CD information on its own.  **No jailbreak needed**. This works the same on retail firmware as it does on modded consoles, since it uses just a network setting.
+This project is a local proxy that **brings back online album metadata for audio CDs** played on the PS3 gaming console. It works by intercepting the PS3's metadata requests and answering them with data from [gnudb](https://gnudb.org/). The original metadata service was discontinued in early 2019, so without this proxy the console can no longer fetch CD information on its own. **No jailbreak needed**. This works the same on retail firmware as it does on modded consoles, since it uses just a network setting.
 
 ## Overview
 
@@ -12,7 +12,8 @@ When the PS3 plays an audio CD, it is trying to contact already disabled servers
 
 1. The **DNS server** (port 53) intercepts the PS3's DNS queries for the console's original metadata servers and answers with your local IP address. By default uses `8.8.8.8` as DNS upstream. 
 2. The **HTTP server** (port 80) receives the PS3's binary `BIN ` TLV requests on `/sdkrequest`, translates the disc TOC into a gnudb (FreeDB) CDDB query, fetches matching album metadata, and replies with a binary response in the format the PS3 expects.
-3. Responses are cached on disk (`cache/`) to avoid hammering gnudb, and raw request/response dumps can be saved to `dumps/` for debugging.
+3. Responses are cached to avoid hammering gnudb, and raw request/response dumps can be saved to `dumps/` for debugging.
+4. Every disc the console asks about is recorded in the same SQLite database (`db/ps3cddb.sqlite`) and shown on the gallery page at `http://<host>/`, updated live over SSE. Cover art is downloaded once and stored in the same database, then served from `/cover/<discId>`.
 
 ## Requirements
 
@@ -48,6 +49,7 @@ Edit `api/config.json` before the first run:
 ```bash
 npm start
 ```
+<img src="https://github.com/user-attachments/assets/415bb604-46c6-4232-a0ca-fc175773b2e9" />
 
 On Windows, run the terminal **as Administrator** (ports 53/80 are privileged on some setups); on Linux use `sudo` or `setcap`.
 
@@ -65,8 +67,8 @@ Notes:
 
 - `HOST_IP` **must** be set to the Docker host's LAN IP - inside the container the auto-detected address would be the container-internal one, which the PS3 cannot reach.
 - Ports 53 (UDP+TCP) and 80 are published on the host, so nothing else may already use them (e.g. `dnsmasq`, `systemd-resolved`, IIS). On Windows, disable the DNS Client service / anything bound to :53 if the bind fails.
-- `cache/`, `dumps/` and `logs/` are bind-mounted from the repo directory, so data survives container restarts.
-- Optional env overrides: `GNUDB_EMAIL`, `LOG_LEVEL`, `LOG_COLOR`, `DNS_PORT`, `HTTP_PORT`.
+- `db/`, `dumps/` and `logs/` are bind-mounted from the repo directory, so data survives container restarts.
+- Optional env overrides: `GNUDB_EMAIL`, `LOG_LEVEL`, `LOG_COLOR`, `DNS_PORT`, `HTTP_PORT`, `GNUDB_TEST_RECORD` (fixed-response test mode, see [Running](#running)).
 - If `HOST_IP` is a WAN-reachable address rather than a LAN one, read [Security](#security) below first.
 
 # Setup on PS3
@@ -74,6 +76,23 @@ Notes:
 1. Set the primary DNS server to the emulator machine's IP using network settings.
 2. Make sure the CDDB EULA is accepted (it shows up on first cd metadata fetch).
 3. Insert an audio CD - the PS3 will fetch artist, album, track titles metadata from gnudb.
+
+## Gallery
+
+Open `http://<host>/` in a browser to see every disc the console has looked up, as a live grid of album covers - no setup needed, it's served by the same HTTP server.
+
+- **Live**: new discs appear as soon as the PS3 queries them, pushed to the page over Server-Sent Events (`GET /events`) - no refresh needed.
+- **Grouped by disc**: if gnudb returns several candidate matches for the same disc, they're grouped under one card; clicking it opens a modal listing every candidate with its own cover and tracklist, so you can tell similar releases apart.
+- **Cover art**: fetched once from [coverartarchive.org](https://coverartarchive.org/) and cached in the database, served locally from `GET /cover/<discId>` so the gallery still works if that service is unreachable later. Click a cover to open it full-size.
+- **Persistent**: every disc, its candidate matches, and cover art are stored in database.
+
+### Main page
+
+<img src="https://github.com/user-attachments/assets/b081093b-2d17-4a1a-9390-4c8d97a451b7" />
+
+### CD metadata modal window
+
+<img src="https://github.com/user-attachments/assets/92ae3831-9297-4642-a7d7-208ef9e62d62" />
 
 ## Security
 
@@ -96,14 +115,37 @@ In short: these mitigations reduce casual/automated abuse, they do **not** turn 
 npm test
 ```
 
+### Test mode
+
+Set `GNUDB_TEST_RECORD` to answer **every** disc with the same gnudb record, without ever contacting gnudb. Only the `DISCID` line is rewritten to the disc id of the disc actually in the drive; all other fields (title, artist, year, genre, track titles) come from the file.
+
+```bash
+# bundled sample (api/samples/gnudb-sample.txt)
+GNUDB_TEST_RECORD=1 npm start
+
+# or your own raw gnudb record
+GNUDB_TEST_RECORD=./my-record.txt npm start
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:GNUDB_TEST_RECORD="1"; npm start
+```
+
+This is useful for testing the PS3 response path (TLV records, slots, XMB display) with known data. The startup log confirms it with `[test] GNUDB_TEST_RECORD active`. Unset the variable to restore normal gnudb lookups.
+
+The record file is **re-read whenever it changes on disk** (checked per request via mtime/size), so you can edit `gnudb-sample.txt` while the server runs and the next disc will use the new data - no restart needed. The reload is logged as `[test] reloaded <file>`. If the file becomes unreadable mid-session, the last good record is kept and a warning is logged.
+
 ## Project layout
 
 ```
 api/          Node.js emulator (DNS + HTTP + gnudb client)
   src/        Source code
   test/       Jest tests
+  samples/    Sample gnudb records (test mode)
   config.json Configuration
-cache/        On-disk gnudb album cache
+db/           SQLite database (gnudb record cache + gallery + cover art)
 dumps/        Raw request/response captures from a real PS3
 logs/         Daily log files
 ```
@@ -112,6 +154,7 @@ logs/         Daily log files
 
 - Protocol details determined by the author and community through interoperability research on their own hardware.
 - Metadata provided by [gnudb](https://gnudb.org/) - please respect their usage policy.
+- Cover art provided by [coverartarchive.org](https://coverartarchive.org/) - please respect their usage policy.
 
 ## Disclaimer
 
@@ -121,6 +164,22 @@ logs/         Daily log files
 - **No warranty.** This software is provided "as is", without warranty of any kind, express or implied, as stated in the [LICENSE](LICENSE) (MIT).
 - **No liability.** To the extent permitted by law, the author is not liable for any damage, data loss, network disruption, console malfunction, account/service consequences, or other loss arising from downloading, configuring, or running this software, or from how you configure your own network, DNS, or console.
 - **Your responsibility.** You are solely responsible for complying with the laws and third-party terms applicable in your jurisdiction, and for only running this against hardware and networks you own or are authorized to use.
+
+## Changelog
+
+### v1.1 (2026-09-20)
+
+- Added a web gallery listing every disc the console has queried, live-updating over SSE, with cover art.
+- Switched storage from flat cache/dump files to a SQLite database (`db/ps3cddb.sqlite`), which also holds the gallery data and cover art.
+- Added a `GNUDB_TEST_RECORD` test mode to answer every disc with a fixed record, without contacting gnudb.
+- Reworked TOC handling and album/artist parsing for more reliable metadata matches.
+- Added a startup banner with version info, small changes to logs.
+
+### v1.0 (2026-09-10)
+
+- Initial release: DNS spoofing + HTTP proxy that emulates the PS3's CDDB metadata service using gnudb.
+- Added Docker support and configurable DNS upstream.
+- Added per-IP rate limiting / auto-ban and a Node.js CI workflow (tests + coverage).
 
 ## License
 

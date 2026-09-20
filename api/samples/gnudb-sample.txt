@@ -1,0 +1,87 @@
+210 data b40bb995 CD database entry follows (until terminating `.')
+# xmcd
+#
+# Track frame offsets:
+#     150
+#     8333
+#     25066
+#     40547
+#     56762
+#     74339
+#     84034
+#     100670
+#     118258
+#     136284
+#     152226
+#     160339
+#     171773
+#     189233
+#     206576
+#
+# Disc length: 3003 seconds
+# Leadout: 225171
+#
+# Revision: 0
+# Processed by: gnucddb v1.0.1 Copyright (c) Gnudb.
+# Submitted via: gnudbx v1.0.11
+# Cover: https://coverartarchive.org/release/62b7cd8d-ff04-4e8b-a615-6fab903535bd/23655914879-500.jpg
+# Artid: 62b7cd8d-ff04-4e8b-a615-6fab903535bd
+# Artid: 62b7cd8d-ff04-4e8b-a615-6fab903535bd
+# Artid: 62b7cd8d-ff04-4e8b-a615-6fab903535bd
+#
+DISCID=b40bb90f
+DTITLE=Various Artists / This is test album data!
+DYEAR=2033-12-13
+DGENRE=dance
+# --- test track titles: one per typical title form --------------------------
+# Format: <n>  <input>  ->  <title shown on the XMB>
+#  0  Simple Title                                  -> Simple Title
+#  1  ASCII parens ( )   - NOT processed            -> Radio Edit (radio edit)
+#  2  ASCII brackets [ ] - NOT processed            -> Extended Mix [Club Version]
+#  3  full-width （ ）    - appended as "-contents"  -> 曲名-Live
+#  4  full-width 【 】    - removed                  -> 曲名
+#  5  full-width ［ ］    - segment kept, re-rendered as ASCII " [seg]" -> 曲名 [Remix]
+#  6  full-width ［ ］ with a removal tag - dropped  -> 曲名
+#     (tags: *  ＃  #  シークレット曲  効果音  ライブガヤ  無音)
+#  7  full-width ＜ ＞    - moved to the subtitle (brackets kept) -> title 曲名
+#  8  full-width ｛ ｝    - moved to the subtitle, after ＜ ＞    -> title 曲名
+#  9  featured artist                               -> Duet feat. Someone Else
+# 10  "- Live" dash suffix                          -> Live at Budokan - 1978
+# 11  combined （ ）+＜ ＞ (the documented example)  -> 曲名-Live (text after
+#     the first bracket is truncated; subtitle is ＜Remix＞)
+# 12  empty title                                   -> (empty)
+# 13  long title, no brackets                       -> unchanged
+# 14  non-ASCII + symbols                           -> Ünïcødé ★ #1 & Symbols
+TTITLE0=Some other artist / Simple Title
+TTITLE1=Another artist / Radio Edit (radio edit)
+TTITLE2=Extended Mix [Club Version]
+TTITLE3=曲名（Live）
+TTITLE4=曲名【Bonus Track】
+TTITLE5=曲名［Remix］
+TTITLE6=曲名［シークレット曲］
+TTITLE7=曲名＜Remix＞
+TTITLE8=曲名｛Hidden｝
+TTITLE9=Duet feat. Someone Else
+TTITLE10=Live at Budokan - 1978
+TTITLE11=曲名（Live）＜Remix＞ extra text
+TTITLE12=
+TTITLE13=A Very Long Track Title Without Any Brackets That Tests How The XMB Truncates Long Strings
+TTITLE14=Ünïcødé ★ #1 & Symbols
+EXTD=
+EXTT0=
+EXTT1=
+EXTT2=
+EXTT3=
+EXTT4=
+EXTT5=
+EXTT6=
+EXTT7=
+EXTT8=
+EXTT9=
+EXTT10=
+EXTT11=
+EXTT12=
+EXTT13=
+EXTT14=
+PLAYORDER=
+.

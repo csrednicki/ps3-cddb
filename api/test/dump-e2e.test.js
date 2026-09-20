@@ -5,7 +5,7 @@ const { buildBinHeader } = require('../src/bin-header');
 const { parseRequest } = require('../src/request');
 const { readRecords, TAGS, readContainer } = require('../src/tlv');
 const { buildResponse } = require('../src/records');
-const { findAlbumByRawToc, loadAlbums } = require('../src/albums');
+const { findAlbumByRawToc, loadAlbums, tocFromRequest } = require('../src/albums');
 const SEED_DIR = path.join(__dirname, 'seed');
 
 // Kept identical to sample-album.json's rawTocKeys so this exercises the real
@@ -76,6 +76,38 @@ describe('Synthetic PS3 request packet (fixture, no captured console dump)', () 
     expect(req.rawTocHex).toBe(RAW_TOC_HEX);
   });
 
+  it('should decode the captured TOC as [END, START, lengths…] satisfying END = START + Σlengths − 1', () => {
+    // values[0] = END, values[1] = START, values[2..] = per-track lengths
+    expect(req.toc.values).toHaveLength(req.toc.nTracks + 2);
+    const [end, start, ...lens] = req.toc.values;
+    expect(lens).toHaveLength(req.toc.nTracks);
+    expect(end).toBe(start + lens.slice(0, req.toc.nTracks).reduce((a, b) => a + b, 0) - 1);
+  });
+
+  it('should derive frame offsets as a running sum from START and the lengths', () => {
+    const toc = tocFromRequest(req);
+    const [end, start, ...lens] = req.toc.values;
+    expect(toc.frameOffsets).toHaveLength(req.toc.nTracks);
+    // freedb counts from the lead-in, so every offset is START + 150
+    expect(toc.frameOffsets[0]).toBe(start + 150);
+    for (let i = 1; i < toc.frameOffsets.length; i++) {
+      expect(toc.frameOffsets[i] - toc.frameOffsets[i - 1]).toBe(lens[i - 1]);
+    }
+    // the last track ends exactly at END + 1, shifted by the lead-in
+    expect(toc.frameOffsets[toc.frameOffsets.length - 1] + lens[lens.length - 1]).toBe(end + 1 + 150);
+  });
+
+  it('should compute the freedb disc id 8e0b690b for the captured TOC (+150 lead-in)', () => {
+    const { getDiscId } = require('../src/cddb');
+    const toc = tocFromRequest(req);
+    const id = getDiscId(toc.frameOffsets, toc.nTracks, toc.leadoutSeconds);
+    expect(id.toString(16).padStart(8, '0')).toBe('8e0b690b');
+    // freedb offsets/lead-out for this disc, as independently decoded
+    expect(toc.frameOffsets[0]).toBe(150);
+    expect(toc.frameOffsets[1]).toBe(18712);
+    expect(toc.leadoutSeconds).toBe(2923);
+  });
+
   it('should end with the multipart closing marker \r\n--', () => {
     expect(body.subarray(0x80, 0x84).toString('latin1')).toBe('\r\n--');
   });
@@ -103,6 +135,14 @@ describe('Sample album disc match (raw TOC from the fixture packet)', () => {
     expect(slots[1].toString('utf8').replace(/\0/g, '')).toBe('Sample Sounds');
     expect(slots[4].toString('utf8').replace(/\0/g, '')).toBe('Test Artist');
     expect(slots[10].length).toBe(0); // slot 10 = ABSENT (hard-lock when text!)
+  });
+
+  it('should align the seed album tracks to the disc audio track count when a TOC is given', () => {
+    const album = findAlbumByRawToc(RAW_TOC_HEX);
+    const resp = buildResponse({ album, toc: { audioTrackCount: 11, start: 150 } });
+    const slots = readContainer(readRecords(resp)[0].payload);
+    const group = readContainer(readContainer(slots[15])[0]);
+    expect(readContainer(group[0])).toHaveLength(11); // matches the physical disc
   });
 
   it('should emit an E record with code 0x23 when no album matches', () => {

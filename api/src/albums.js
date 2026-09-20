@@ -4,11 +4,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const log = require('./logger');
 const { loadConfig } = require('./config');
+const { openDb } = require('./db');
 const { decodeTocField } = require('./toc');
 const { queryCddbMatches, fetchCddbRecord, parseAlbum, getDiscId } = require('./cddb');
 
 const cfg = loadConfig();
-const CACHE_DIR = path.resolve(__dirname, "..", "..", cfg.gnudbCache.dir);
 const CACHE_TTL_MS = Math.max(0, cfg.gnudbCache.ttlSeconds * 1000);
 // gnudb can list many candidates for an ambiguous TOC - cap the per-candidate
 // detail fetches so one lookup can't fan out into an unbounded burst of requests.
@@ -17,6 +17,108 @@ const indexByRaw = new Map();
 
 const cache = new Map();
 const inflight = new Map();
+
+// Test mode (GNUDB_TEST_RECORD): one fixed gnudb record served for every disc
+// that is inserted, with the disc id recomputed from the disc actually in the
+// drive. Used to exercise the PS3 response path without touching gnudb.
+//
+// The record can be held either inline (setTestRecord, used by tests) or as a
+// file path (setTestRecordFile / GNUDB_TEST_RECORD). A path is re-read whenever
+// the file changes on disk, so editing the sample while the server runs takes
+// effect on the next disc without a restart.
+let testRecord = null;
+let testRecordPath = null;
+let testRecordMtime = -1;
+let testRecordSize = -1;
+
+/**
+ * Enables/disables test mode from an inline record: the raw gnudb record text
+ * to serve for every disc, or null/undefined to restore normal lookups.
+ * @param {string|null} [record] - raw gnudb record text (see api/samples/gnudb-sample.txt)
+ * @returns {void}
+ */
+function setTestRecord(record) {
+  testRecord = record ? String(record) : null;
+  testRecordPath = null;
+  testRecordMtime = -1;
+  testRecordSize = -1;
+}
+
+/**
+ * Enables/disables test mode from a file: the raw gnudb record is (re)read from
+ * `file` whenever its mtime/size change, so edits are picked up live.
+ * @param {string|null} [file] - path to a raw gnudb record file, or null to disable
+ * @returns {void}
+ */
+function setTestRecordFile(file) {
+  testRecordPath = file ? String(file) : null;
+  testRecord = null;
+  testRecordMtime = -1;
+  testRecordSize = -1;
+}
+
+/**
+ * Whether test mode is currently active.
+ * @returns {boolean} true when a test record (inline or file-backed) is configured
+ */
+function isTestMode() {
+  return testRecord !== null || testRecordPath !== null;
+}
+
+/**
+ * Resolves the raw gnudb record to serve right now. A file-backed record is
+ * re-read when its mtime/size differ from the cached ones; on a read error the
+ * last good content is kept (and a warning is logged) so a transient failure
+ * cannot take the server down mid-session.
+ * @returns {string|null} the record text, or null when test mode is inactive/unusable
+ */
+function currentTestRecord() {
+  if (!testRecordPath) return testRecord;
+  try {
+    const { mtimeMs, size } = fs.statSync(testRecordPath);
+    if (mtimeMs !== testRecordMtime || size !== testRecordSize) {
+      testRecord = fs.readFileSync(testRecordPath, 'utf8');
+      testRecordMtime = mtimeMs;
+      testRecordSize = size;
+      log.info(`[test] reloaded ${testRecordPath} (${size} B)`);
+    }
+  } catch (e) {
+    log.warn(`[test] cannot re-read ${testRecordPath} (${e.message}) - keeping last good record`);
+  }
+  return testRecord;
+}
+
+/**
+ * Loads test mode from the GNUDB_TEST_RECORD env var at startup. Accepts
+ * either a path to a raw gnudb record file or a truthy flag ("1"/"true"),
+ * which loads the bundled sample at api/samples/gnudb-sample.txt.
+ * @returns {boolean} true when a record was loaded
+ */
+function loadTestRecordFromEnv() {
+  const val = process.env.GNUDB_TEST_RECORD;
+  if (!val) return false;
+  const isFlag = /^(1|true|yes)$/i.test(val);
+  const file = isFlag ? path.join(__dirname, '..', 'samples', 'gnudb-sample.txt') : val;
+  setTestRecordFile(file);
+  if (!currentTestRecord()) {
+    log.error(`[test] GNUDB_TEST_RECORD: cannot read ${file} - falling back to gnudb`);
+    setTestRecordFile(null);
+    return false;
+  }
+  log.info(`[test] GNUDB_TEST_RECORD active - every disc answers with ${file} (edits are picked up live)`);
+  return true;
+}
+
+/**
+ * Rewrites the DISCID line of a raw gnudb record so it carries the disc id of
+ * the disc actually in the drive instead of the one from the test record.
+ * @param {string} record - raw gnudb record text
+ * @param {string} discId - disc id (8 hex digits) to write
+ * @returns {string} the record with its DISCID line replaced
+ */
+function withDiscId(record, discId) {
+  return String(record).replace(/^DISCID=.*$/m, `DISCID=${discId}`);
+}
 
 /**
  * Loads every seed album (.json) from `dir` and indexes it by its rawToc keys
@@ -44,119 +146,111 @@ function findAlbumByRawToc(rawTocHex) {
 }
 
 /**
- * Builds the on-disk cache filename stem "<discId>-<artist>-<title>" (without
- * extension), sanitizing artist/title to safe, length-capped path segments.
- * @param {string} discId - CDDB disc id (8 hex digits), the stable cache key
- * @param {string} artist - album artist, sanitized for use in a filename
- * @param {string} title - album title, sanitized for use in a filename
- * @returns {string} the cache filename stem
- */
-function cacheFileStem(discId, artist, title) {
-  const safe = (s) => String(s ?? '')
-    .replace(/[^\w .-]/g, '')
-    .trim()
-    .replace(/\s+/g, '_')
-    .slice(0, 60);
-  const suffix = `${safe(artist)}-${safe(title)}`;
-  return `${discId}-${suffix}`;
-}
-
-/**
- * Sweeps the disk cache and deletes every .txt entry whose age exceeds the
+ * Sweeps the gnudb record cache and deletes every entry older than the
  * configured TTL. Deferred via setImmediate so it never delays the response
  * that triggered it; readDiskCache() renews any entry it actively reuses, so
- * a file being asked about right now will not be caught by this sweep.
+ * a record being asked about right now will not be caught by this sweep.
  * @returns {void}
  */
 function purgeDiskCache() {
   setImmediate(() => {
+    const d = openDb();
+    if (!d) return;
     try {
-      for (const f of fs.readdirSync(CACHE_DIR)) {
-        if (!f.endsWith('.txt')) continue;
-        const full = path.join(CACHE_DIR, f);
-        try {
-          const { mtimeMs } = fs.statSync(full);
-          if (Date.now() - mtimeMs > CACHE_TTL_MS) {
-            fs.unlinkSync(full);
-            const expiredAt = new Date(mtimeMs + CACHE_TTL_MS).toISOString().slice(11, 19) + 'Z';
-            log.info(`[cache] purged: ${f} (expired at ${expiredAt})`);
-          }
-        } catch { /* file vanished mid-scan - ignore */ }
-      }
-    } catch { /* cache dir unreadable - ignore */ }
+      const cutoff = Date.now() - CACHE_TTL_MS;
+      const { changes } = d.prepare('DELETE FROM gnudb_cache WHERE fetched_at < ?').run(cutoff);
+      if (changes) log.info(`[cache] purged ${changes} expired record(s)`);
+    } catch (e) {
+      log.warn(`[cache] purge failed: ${e.message}`);
+    }
   });
 }
 
 /**
  * Reads the cached gnudb record for `discId`, if any. An entry past its TTL
- * is not treated as a miss: it is renewed (mtime bumped to now) and served
- * anyway, since the disc being asked about right now is exactly the one
+ * is not treated as a miss: it is renewed (fetched_at bumped to now) and
+ * served anyway, since the disc being asked about right now is exactly the one
  * purgeDiskCache() would otherwise delete.
  * @param {string} discId - CDDB disc id (8 hex digits)
  * @returns {{record: string, mtimeMs: number, file: string}|null} the cache hit, or null on a genuine miss
  */
 function readDiskCache(discId) {
+  const d = openDb();
+  if (!d) return null;
   try {
-    for (const f of fs.readdirSync(CACHE_DIR)) {
-      if (!f.startsWith(`${discId}-`) || !f.endsWith('.txt')) continue;
-      const full = path.join(CACHE_DIR, f);
-      const { mtimeMs } = fs.statSync(full);
-      const record = fs.readFileSync(full, 'utf8');
-      const now = Date.now();
-      if (now - mtimeMs > CACHE_TTL_MS) {
-        // Someone is asking about this exact disc right now - reuse what we
-        // have instead of both discarding it and re-hitting gnudb for data
-        // that almost certainly hasn't changed. Renewing the mtime also means
-        // a purgeDiskCache() sweep racing this read will see it as fresh and
-        // leave the file alone instead of deleting it out from under us.
-        fs.utimesSync(full, new Date(now), new Date(now));
-        log.info(`[cache] renewed: ${f} (was expired - reused instead of a fresh gnudb lookup)`);
-        return { record, mtimeMs: now, file: f };
-      }
-      return { record, mtimeMs, file: f };
+    const row = d.prepare('SELECT record, fetched_at FROM gnudb_cache WHERE disc_id = ?').get(discId);
+    if (!row) return null;
+    const now = Date.now();
+    if (now - row.fetched_at > CACHE_TTL_MS) {
+      // Someone is asking about this exact disc right now - reuse what we
+      // have instead of both discarding it and re-hitting gnudb for data
+      // that almost certainly hasn't changed. Renewing fetched_at also means
+      // a purgeDiskCache() sweep racing this read will see it as fresh and
+      // leave the row alone instead of deleting it out from under us.
+      d.prepare('UPDATE gnudb_cache SET fetched_at = ? WHERE disc_id = ?').run(now, discId);
+      log.info(`[cache] renewed: ${discId} (was expired - reused instead of a fresh gnudb lookup)`);
+      return { record: row.record, mtimeMs: now, file: discId };
     }
-  } catch { /* no cache dir / unreadable - treat as a miss */ }
-  return null;
+    return { record: row.record, mtimeMs: row.fetched_at, file: discId };
+  } catch (e) {
+    log.warn(`[cache] read failed: ${e.message}`);
+    return null;
+  }
 }
 
 /**
- * Persists a raw gnudb record to disk under its discId-derived filename.
- * Called by http-server after the response has been sent to the PS3, so the
- * write never delays the reply.
+ * Persists a raw gnudb record under its disc id. Called by http-server after
+ * the response has been sent to the PS3, so the write never delays the reply.
  * @param {string} discId - CDDB disc id (8 hex digits), the stable cache key
- * @param {string} artist - album artist, used only for a human-readable filename
- * @param {string} title - album title, used only for a human-readable filename
+ * @param {string} artist - album artist (unused; kept for call-site compatibility)
+ * @param {string} title - album title (unused; kept for call-site compatibility)
  * @param {string} record - raw gnudb record text to cache
  * @returns {void}
  */
 function writeDiskCache(discId, artist, title, record) {
+  const d = openDb();
+  if (!d) return;
   try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    const file = path.join(CACHE_DIR, `${cacheFileStem(discId, artist, title)}.txt`);
-    fs.writeFileSync(file, String(record), 'utf8');
+    d.prepare(`INSERT INTO gnudb_cache (disc_id, record, fetched_at) VALUES (?,?,?)
+      ON CONFLICT(disc_id) DO UPDATE SET record = excluded.record, fetched_at = excluded.fetched_at`)
+      .run(discId, String(record), Date.now());
     const expiresAt = new Date(Date.now() + CACHE_TTL_MS).toISOString().slice(11, 19) + 'Z';
-    log.info(`[cache] saved: ${path.basename(file)} (fresh until ${expiresAt})`);
+    log.info(`[cache] saved: ${discId} (fresh until ${expiresAt})`);
   } catch (e) {
     log.warn(`[cache] write failed: ${e.message}`);
   }
 }
 
 /**
+ * Frames of lead-in before the first track. The PS3 TOC's START is a plain LBA
+ * (the captured request has START = 0), while gnudb/freedb offsets and lead-out
+ * are counted from the start of the disc including this lead-in, so every
+ * offset and the lead-out need +150 before computing a disc id or a query.
+ */
+const LEAD_IN_FRAMES = 150;
+
+/**
  * Derives CDDB query inputs (per-track frame offsets, leadout in seconds,
  * track count) from a parsed PS3 request's TOC.
+ *
+ * The decoded values are `[END, START, L_1…L_N]`; the frame offsets are the
+ * running sum of the lengths starting at START, and the lead-out is END + 1.
+ * Both are shifted by LEAD_IN_FRAMES because freedb counts from the lead-in.
  * @param {object} req - parsed request; carries either `toc` (decoded) or `tocBytes` (raw)
  * @returns {{frameOffsets: number[], leadoutSeconds: number, nTracks: number}|null} null when the TOC has no tracks
  */
 function tocFromRequest(req) {
   const dec = req.toc ?? decodeTocField(req.tocBytes);
   if (!dec || dec.nTracks < 1) return null;
-  let acc = 150;
-  const frameOffsets = [150];
-  for (let i = 2; i < dec.values.length; i++) {   // skip d1 (=0)
-    acc += dec.values[i];
-    frameOffsets.push(acc);
+  const start = (dec.values[1] ?? 0) + LEAD_IN_FRAMES;
+  const lens = dec.values.slice(2); // one length per audio track
+  // nTracks offsets: track 0 starts at START, each next one after the previous length
+  const frameOffsets = [start];
+  for (let i = 0; i < dec.nTracks - 1; i++) {
+    frameOffsets.push(frameOffsets[i] + (lens[i] ?? 0));
   }
-  const leadoutSeconds = Math.floor(dec.values[0] / 75);
+  // lead-out = END + 1, shifted by the lead-in
+  const leadoutSeconds = Math.floor((dec.values[0] + 1 + LEAD_IN_FRAMES) / 75);
   return { frameOffsets, leadoutSeconds, nTracks: dec.nTracks };
 }
 
@@ -185,6 +279,10 @@ async function fetchCandidate(match, toc) {
     numDiscs,
     discNumber: album.albumDisc || 1, // disc number within the set (from DTITLE heuristic)
     tracks: album.tracks,
+    cover: album.albumCover, // coverartarchive.org URL from the record's "# Cover:" line
+    artid: album.albumArtid, // MusicBrainz release id from the record's "# Artid:" line
+    frameOffsets: album.albumFrameOffsets, // gnudb "# Track frame offsets:" (frames)
+    leadout: album.albumLeadout, // gnudb "# Leadout:" or "# Disc length:" × 75 (frames)
     __gnudbRecord: record, // raw gnudb text - saved next to the response dump
   };
 }
@@ -252,6 +350,38 @@ async function lookupLive(req) {
 async function findAlbumLive(req) {
   const key = String(req.rawTocHex ?? '').toLowerCase();
   if (!key) return null;
+
+  // Test mode wins over every other source: whatever disc is inserted, answer
+  // with the fixed record, only swapping in that disc's own DISCID. A
+  // file-backed record is re-read here, so live edits take effect immediately.
+  const record = currentTestRecord();
+  if (record) {
+    const toc = tocFromRequest(req);
+    const discId = toc
+      ? getDiscId(toc.frameOffsets, toc.nTracks, toc.leadoutSeconds).toString(16).padStart(8, '0')
+      : null;
+    const served = discId ? withDiscId(record, discId) : record;
+    const album = parseAlbum(served, 99);
+    const built = {
+      title: album.albumTitle,
+      artist: album.albumArtist,
+      genre: album.albumGenre,
+      year: album.albumYear || '',
+      numDiscs: Math.max(1, album.albumDisc || 1),
+      discNumber: album.albumDisc || 1,
+      tracks: album.tracks,
+      cover: album.albumCover,
+      artid: album.albumArtid,
+      frameOffsets: album.albumFrameOffsets,
+      leadout: album.albumLeadout,
+      __gnudbRecord: served,
+      __fromTest: true,
+      discId,
+    };
+    log.info(`[test] fixed record for discId=${discId ?? 'unknown'}: "${built.title}" - ${built.artist} (${built.tracks.length} tracks)`);
+    return built;
+  }
+
   if (cache.has(key)) {
     const album = cache.get(key);
     log.info(`[cache] memory: "${album.title}" - ${album.artist}`);
@@ -278,8 +408,12 @@ async function findAlbumLive(req) {
       genre: album.albumGenre,
       year: album.albumYear || '',
       numDiscs: Math.max(1, album.albumDisc || 1),
+      frameOffsets: album.albumFrameOffsets,
+      leadout: album.albumLeadout,
       discNumber: album.albumDisc || 1,
       tracks: album.tracks,
+      cover: album.albumCover,
+      artid: album.albumArtid,
       __gnudbRecord: hit.record,
       __fromCache: true,
     };
@@ -315,4 +449,4 @@ async function findAlbumLive(req) {
   return inflight.get(key);
 }
 
-module.exports = { loadAlbums, findAlbumByRawToc, findAlbumLive, lookupLive, writeDiskCache, purgeDiskCache };
+module.exports = { loadAlbums, findAlbumByRawToc, findAlbumLive, lookupLive, writeDiskCache, purgeDiskCache, setTestRecord, setTestRecordFile, isTestMode, loadTestRecordFromEnv, tocFromRequest };
