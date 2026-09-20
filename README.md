@@ -2,7 +2,7 @@
 
 # PS3 CDDB Proxy
 
-This project is a local proxy that **brings back online album metadata for audio CDs** played on the PS3 gaming console. It works by intercepting the PS3's metadata requests and answering them with data from [gnudb](https://gnudb.org/). The original metadata service was discontinued in early 2019, so without this proxy the console can no longer fetch CD information on its own.  **No jailbreak needed**. This works the same on retail firmware as it does on modded consoles, since it uses just a network setting.
+This project is a local proxy that **brings back online album metadata for audio CDs** played on the PS3 gaming console. It works by intercepting the PS3's metadata requests and answering them with data from [gnudb](https://gnudb.org/). The original metadata service was discontinued in early 2019, so without this proxy the console can no longer fetch CD information on its own. **No jailbreak needed**. This works the same on retail firmware as it does on modded consoles, since it uses just a network setting.
 
 ## Overview
 
@@ -98,6 +98,15 @@ Notes:
 2. Make sure the CDDB EULA is accepted (it shows up on first cd metadata fetch).
 3. Insert an audio CD - the PS3 will fetch artist, album, track titles metadata from gnudb.
 
+## Gallery
+
+Open `http://<host>/` in a browser to see every disc the console has looked up, as a live grid of album covers - no setup needed, it's served by the same HTTP server.
+
+- **Live**: new discs appear as soon as the PS3 queries them, pushed to the page over Server-Sent Events (`GET /events`) - no refresh needed.
+- **Grouped by disc**: if gnudb returns several candidate matches for the same disc, they're grouped under one card; clicking it opens a modal listing every candidate with its own cover and tracklist, so you can tell similar releases apart.
+- **Cover art**: fetched once from [coverartarchive.org](https://coverartarchive.org/) and cached in the database, served locally from `GET /cover/<discId>` so the gallery still works if that service is unreachable later. Click a cover to open it full-size.
+- **Persistent**: every disc, its candidate matches, and cover art are stored in database.
+
 ## Security
 
 **Run this on a trusted LAN, not on the public internet.** The proxy reimplements the PS3's original plaintext CDDB protocol, which has no authentication and no encryption - anyone who can reach ports 53 (DNS) and 80 (HTTP) can query it, and it was never designed to withstand hostile traffic from strangers. Set `dns.answerIp` / `HOST_IP` to a private LAN address (e.g. `192.168.x.x`), not a public IP.
@@ -145,6 +154,22 @@ logs/         Daily log files
 - **No warranty.** This software is provided "as is", without warranty of any kind, express or implied, as stated in the [LICENSE](LICENSE) (MIT).
 - **No liability.** To the extent permitted by law, the author is not liable for any damage, data loss, network disruption, console malfunction, account/service consequences, or other loss arising from downloading, configuring, or running this software, or from how you configure your own network, DNS, or console.
 - **Your responsibility.** You are solely responsible for complying with the laws and third-party terms applicable in your jurisdiction, and for only running this against hardware and networks you own or are authorized to use.
+
+## Changelog
+
+### v1.1 (2026-09-20)
+
+- Added a web gallery listing every disc the console has queried, live-updating over SSE, with cover art.
+- Switched storage from flat cache/dump files to a SQLite database (`db/ps3cddb.sqlite`), which also holds the gallery data and cover art.
+- Added a `GNUDB_TEST_RECORD` test mode to answer every disc with a fixed record, without contacting gnudb.
+- Reworked TOC handling and album/artist parsing for more reliable metadata matches.
+- Added a startup banner with version info, small changes to logs.
+
+### v1.0 (2026-09-10)
+
+- Initial release: DNS spoofing + HTTP proxy that emulates the PS3's CDDB metadata service using gnudb.
+- Added Docker support and configurable DNS upstream.
+- Added per-IP rate limiting / auto-ban and a Node.js CI workflow (tests + coverage).
 
 ## License
 
