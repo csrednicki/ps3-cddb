@@ -10,10 +10,11 @@ const { loadConfig } = require('./config');
 const log = require('./logger');
 const { parseRequest } = require('./request');
 const { buildResponse } = require('./records');
-const { findAlbumLive, writeDiskCache, purgeDiskCache } = require('./albums');
+const { findAlbumLive, writeDiskCache, purgeDiskCache, tocFromRequest } = require('./albums');
 const { registerConsole } = require('./consoles');
-const { saveGnudbRecord } = require('./cddb');
+const { saveGnudbRecord, getDiscId } = require('./cddb');
 const { createIpLimiter } = require('./rate-limiter');
+const gallery = require('./gallery');
 
 const cfg = loadConfig();
 
@@ -90,26 +91,23 @@ function startHttpServer() {
       const raw = Buffer.concat(chunks);
       log.info(`[http] ${req.method} ${req.url} from ${req.socket.remoteAddress} (${raw.length} B)`);
 
-      // GET / - test page (confirmation that the emulator is alive and reachable)
+      // GET / - gallery page: every disc inserted since the server started,
+      // updated live over SSE (see gallery.js).
       if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/?'))) {
-        const now = new Date();
-        const html = `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><title>PS3 CDDB API emulator</title>
-<style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh;margin:0}
-main{text-align:center}h1{color:#7fd4ff}code{background:#222;padding:2px 6px;border-radius:4px}</style></head>
-<body><main>
-<h1>API test</h1>
-<p>${now.toLocaleString('en-US')}<br><small>${now.toISOString()}</small></p>
-<p>SDK endpoint: <code>POST ${cfg.http.path}</code></p>
-</main></body></html>`;
+        const html = gallery.renderPage(cfg.client.version);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' });
         res.end(html);
         return;
       }
 
+      // GET /events - SSE stream feeding the gallery page (snapshot + updates).
+      if (req.method === 'GET' && req.url === '/events') {
+        gallery.handleEvents(req, res);
+        return;
+      }
+
       // Any other GET (a browser navigating to /sdkrequest, a favicon probe, etc.) -
-      // send it to the test page instead of a bodyless response, which some
+      // send it to the gallery page instead of a bodyless response, which some
       // browsers (e.g. Chrome) misinterpret as a file download.
       if (req.method === 'GET') {
         res.writeHead(302, { Location: '/', Connection: 'close' });
@@ -142,6 +140,16 @@ main{text-align:center}h1{color:#7fd4ff}code{background:#222;padding:2px 6px;bor
         log.info(`[sdk] type=${parsed.type} mac=${entry.mac} user="${parsed.header.user.toString('latin1').replace(/\0.*$/, '')}" selectors=${parsed.header.integritySelector}/${parsed.header.transformSelector}`);
 
         findAlbumLive(parsed).then((album) => {
+          // Add the disc to the in-memory gallery (shown on GET /) before
+          // building the response. The PS3 response itself is unchanged.
+          const toc = tocFromRequest(parsed);
+          const discId = album?.discId
+            ?? (toc ? getDiscId(toc.frameOffsets, toc.nTracks, toc.leadoutSeconds).toString(16).padStart(8, '0') : null);
+          if (album && discId) {
+            const source = album.__fromTest ? 'test' : album.__fromCache ? 'cache' : 'live';
+            gallery.addAlbum(album, { discId, source });
+          }
+
           // Pass the decoded TOC so the track list can be aligned with the disc
           // in the drive: the audio track count truncates the list and the
           // per-track lengths (frames, decoded values after END+START) are

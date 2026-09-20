@@ -301,6 +301,8 @@ async function fetchCandidate(match, toc) {
     numDiscs,
     discNumber: album.albumDisc || 1, // disc number within the set (from DTITLE heuristic)
     tracks: album.tracks,
+    cover: album.albumCover, // coverartarchive.org URL from the record's "# Cover:" line
+    artid: album.albumArtid, // MusicBrainz release id from the record's "# Artid:" line
     frameOffsets: album.albumFrameOffsets, // gnudb "# Track frame offsets:" (frames)
     leadout: album.albumLeadout, // gnudb "# Leadout:" or "# Disc length:" × 75 (frames)
     __gnudbRecord: record, // raw gnudb text - saved next to the response dump
@@ -390,6 +392,8 @@ async function findAlbumLive(req) {
       numDiscs: Math.max(1, album.albumDisc || 1),
       discNumber: album.albumDisc || 1,
       tracks: album.tracks,
+      cover: album.albumCover,
+      artid: album.albumArtid,
       frameOffsets: album.albumFrameOffsets,
       leadout: album.albumLeadout,
       __gnudbRecord: served,
@@ -430,6 +434,8 @@ async function findAlbumLive(req) {
       leadout: album.albumLeadout,
       discNumber: album.albumDisc || 1,
       tracks: album.tracks,
+      cover: album.albumCover,
+      artid: album.albumArtid,
       __gnudbRecord: hit.record,
       __fromCache: true,
     };

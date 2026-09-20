@@ -31,7 +31,7 @@
     "boundary": "---------------------------265001916915724",
     "replyDelayMs": 3000,
     "rateLimit": {
-      "maxPerSecondPerIp": 5
+      "maxPerSecondPerIp": 50
     },
     "blacklist": {
       "violationWindowMs": 60000,

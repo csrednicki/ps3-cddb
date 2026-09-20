@@ -152,14 +152,20 @@ function parseMatches(reply) {
  * The record's `# Track frame offsets:` and `# Leadout:` comments are parsed
  * into `albumFrameOffsets` / `albumLeadout` (frames) so the server can align
  * tracks with the physical disc without relying on request offsets.
+ *
+ * The `# Cover:` comment (a coverartarchive.org URL) and the `# Artid:`
+ * comment (the MusicBrainz release id) are parsed into `albumCover` /
+ * `albumArtid` so the gallery page can show the album art. gnudb records may
+ * carry several `# Cover:` lines (one per art id); the first one wins.
  * @param {string} text - raw gnudb record text
  * @param {number} [maxTracks=99] - highest TTITLE index to accept (out-of-range indices are ignored)
- * @returns {{albumArtist: string, albumTitle: string, albumGenre: string, albumYear: string, albumDiscId: string, albumDisc: number, albumFrameOffsets: number[], albumLeadout: number|null, tracks: Array<{title: string, artist: string}>}}
+ * @returns {{albumArtist: string, albumTitle: string, albumGenre: string, albumYear: string, albumDiscId: string, albumDisc: number, albumFrameOffsets: number[], albumLeadout: number|null, albumCover: string, albumArtid: string, tracks: Array<{title: string, artist: string}>}}
  */
 function parseAlbum(text, maxTracks = 99) {
   const album = {
     albumArtist: '', albumTitle: '', albumGenre: '', albumYear: '', albumDiscId: '',
-    albumDisc: 0, albumFrameOffsets: [], albumLeadout: null, albumDiscLength: null, tracks: [],
+    albumDisc: 0, albumFrameOffsets: [], albumLeadout: null, albumDiscLength: null,
+    albumCover: '', albumArtid: '', tracks: [],
   };
   const titles = new Array(maxTracks).fill('');
   let highest = -1;
@@ -178,6 +184,10 @@ function parseAlbum(text, maxTracks = 99) {
       if (lm) album.albumLeadout = parseInt(lm[1], 10);
       const dm = line.match(/^#\s*Disc length:\s*(\d+)/);
       if (dm) album.albumDiscLength = parseInt(dm[1], 10);
+      const cm = line.match(/^#\s*Cover:\s*(\S+)/);
+      if (cm && !album.albumCover) album.albumCover = cm[1];
+      const am = line.match(/^#\s*Artid:\s*(\S+)/);
+      if (am && !album.albumArtid) album.albumArtid = am[1];
       continue;
     }
     if (line.startsWith('DTITLE=') && !album.albumTitle) {
