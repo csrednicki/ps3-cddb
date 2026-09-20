@@ -12,7 +12,8 @@ When the PS3 plays an audio CD, it is trying to contact already disabled servers
 
 1. The **DNS server** (port 53) intercepts the PS3's DNS queries for the console's original metadata servers and answers with your local IP address. By default uses `8.8.8.8` as DNS upstream. 
 2. The **HTTP server** (port 80) receives the PS3's binary `BIN ` TLV requests on `/sdkrequest`, translates the disc TOC into a gnudb (FreeDB) CDDB query, fetches matching album metadata, and replies with a binary response in the format the PS3 expects.
-3. Responses are cached on disk (`cache/`) to avoid hammering gnudb, and raw request/response dumps can be saved to `dumps/` for debugging.
+3. Responses are cached to avoid hammering gnudb, and raw request/response dumps can be saved to `dumps/` for debugging.
+4. Every disc the console asks about is recorded in the same SQLite database (`db/ps3cddb.sqlite`) and shown on the gallery page at `http://<host>/`, updated live over SSE. Cover art is downloaded once and stored in the same database, then served from `/cover/<discId>`.
 
 ## Requirements
 
@@ -87,7 +88,7 @@ Notes:
 
 - `HOST_IP` **must** be set to the Docker host's LAN IP - inside the container the auto-detected address would be the container-internal one, which the PS3 cannot reach.
 - Ports 53 (UDP+TCP) and 80 are published on the host, so nothing else may already use them (e.g. `dnsmasq`, `systemd-resolved`, IIS). On Windows, disable the DNS Client service / anything bound to :53 if the bind fails.
-- `cache/`, `dumps/` and `logs/` are bind-mounted from the repo directory, so data survives container restarts.
+- `db/`, `dumps/` and `logs/` are bind-mounted from the repo directory, so data survives container restarts.
 - Optional env overrides: `GNUDB_EMAIL`, `LOG_LEVEL`, `LOG_COLOR`, `DNS_PORT`, `HTTP_PORT`, `GNUDB_TEST_RECORD` (fixed-response test mode, see [Running](#running)).
 - If `HOST_IP` is a WAN-reachable address rather than a LAN one, read [Security](#security) below first.
 
@@ -126,7 +127,7 @@ api/          Node.js emulator (DNS + HTTP + gnudb client)
   test/       Jest tests
   samples/    Sample gnudb records (test mode)
   config.json Configuration
-cache/        On-disk gnudb album cache
+db/           SQLite database (gnudb record cache + gallery + cover art)
 dumps/        Raw request/response captures from a real PS3
 logs/         Daily log files
 ```

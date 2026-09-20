@@ -333,6 +333,28 @@ describe('parseAlbum', () => {
     expect(rec.albumLeadout).toBeNull();
   });
 
+  it('should parse the "# Cover:" and "# Artid:" comments', () => {
+    const rec = parseAlbum([
+      '# Cover: https://coverartarchive.org/release/62b7cd8d-ff04-4e8b-a615-6fab903535bd/23655914879-500.jpg',
+      '# Artid: 62b7cd8d-ff04-4e8b-a615-6fab903535bd',
+      'DTITLE=A / B',
+      'TTITLE0=T',
+    ].join('\n'));
+    expect(rec.albumCover).toBe('https://coverartarchive.org/release/62b7cd8d-ff04-4e8b-a615-6fab903535bd/23655914879-500.jpg');
+    expect(rec.albumArtid).toBe('62b7cd8d-ff04-4e8b-a615-6fab903535bd');
+  });
+
+  it('should keep only the first "# Cover:" when the record carries several', () => {
+    const rec = parseAlbum('# Cover: https://x/1.jpg\n# Cover: https://x/2.jpg\nDTITLE=A / B\n');
+    expect(rec.albumCover).toBe('https://x/1.jpg');
+  });
+
+  it('should leave albumCover and albumArtid empty when the comments are absent', () => {
+    const rec = parseAlbum('DTITLE=A / B\nTTITLE0=T\n');
+    expect(rec.albumCover).toBe('');
+    expect(rec.albumArtid).toBe('');
+  });
+
   it('should parse DISCID into albumDiscId and keep only the first occurrence', () => {
     const rec = parseAlbum('DISCID=b40bb90f\nDISCID=deadbeef\nDTITLE=A / B\n');
     expect(rec.albumDiscId).toBe('b40bb90f');

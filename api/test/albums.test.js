@@ -24,11 +24,24 @@ jest.mock('../src/cddb', () => ({
 
 const { queryCddbMatches, fetchCddbRecord, parseAlbum, getDiscId } = require('../src/cddb');
 const albums = require('../src/albums');
+const { openDb } = require('../src/db');
 const fs = require('node:fs');
 const path = require('node:path');
 const SEED_DIR = path.join(__dirname, 'seed');
 const SEED_KEY = require('./seed/sample-album.json').rawTocKeys[0];
-const CACHE_DIR = path.resolve(__dirname, "..", "..", 'cache');
+
+/**
+ * Inserts a gnudb cache row directly, bypassing writeDiskCache, so a test can
+ * control the age of the entry.
+ * @param {string} discId - CDDB disc id
+ * @param {string} record - raw gnudb record text
+ * @param {number} [ageMs] - how long ago the entry was fetched
+ * @returns {void}
+ */
+function seedCache(discId, record, ageMs = 0) {
+  openDb().prepare('INSERT INTO gnudb_cache (disc_id, record, fetched_at) VALUES (?,?,?)')
+    .run(discId, record, Date.now() - ageMs);
+}
 
 describe('loadAlbums / findAlbumByRawToc (seed sample-album.json)', () => {
   it('should load rawToc keys from .json files in the seed directory', () => {
@@ -64,9 +77,8 @@ describe('loadAlbums / findAlbumByRawToc (seed sample-album.json)', () => {
 describe('findAlbumLive - gnudb (lookup live)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // isolate the on-disk gnudb cache between tests
-    const cacheDir = path.resolve(__dirname, '..', 'cache');
-    fs.rmSync(cacheDir, { recursive: true, force: true });
+    // isolate the gnudb record cache between tests
+    openDb().exec('DELETE FROM gnudb_cache');
   });
 
   it('should return null without querying gnudb when rawTocHex is missing or empty', async () => {
@@ -251,84 +263,55 @@ describe('findAlbumLive - gnudb (lookup live)', () => {
   });
 });
 
-describe('writeDiskCache / purgeDiskCache - on-disk gnudb cache', () => {
+describe('writeDiskCache / purgeDiskCache - gnudb record cache', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    fs.rmSync(CACHE_DIR, { recursive: true, force: true });
+    openDb().exec('DELETE FROM gnudb_cache');
   });
-  afterAll(() => { fs.rmSync(CACHE_DIR, { recursive: true, force: true }); });
 
-  it('should write the raw gnudb record to a discId-artist-title.txt file', () => {
+  it('should store the raw gnudb record under its disc id', () => {
     albums.writeDiskCache('aa11bb22', 'Test Artist', 'Sample Sounds', 'DTITLE=Test Artist / Sample Sounds\n');
-    const files = fs.readdirSync(CACHE_DIR);
-    expect(files).toEqual(['aa11bb22-Test_Artist-Sample_Sounds.txt']);
-    expect(fs.readFileSync(path.join(CACHE_DIR, files[0]), 'utf8')).toBe('DTITLE=Test Artist / Sample Sounds\n');
+    const row = openDb().prepare('SELECT record FROM gnudb_cache WHERE disc_id = ?').get('aa11bb22');
+    expect(row.record).toBe('DTITLE=Test Artist / Sample Sounds\n');
     expect(require('../src/logger').info).toHaveBeenCalledWith(expect.stringContaining('[cache] saved:'));
     expect(require('../src/logger').info).toHaveBeenCalledWith(expect.stringContaining('fresh until'));
   });
 
-  it('should strip unsafe characters from the artist/title and truncate long names in the file stem', () => {
-    const longName = 'x'.repeat(100);
-    albums.writeDiskCache('deadbeef', 'A/B:C*D', longName, 'DTITLE=A / B\n');
-    const [file] = fs.readdirSync(CACHE_DIR);
-    expect(file.startsWith('deadbeef-ABCD-')).toBe(true);
-    // the safe() helper caps each side at 60 chars
-    expect(file.length).toBeLessThan('deadbeef-'.length + 60 + 1 + 60 + '.txt'.length + 1);
+  it('should replace the record when the same disc is cached again', () => {
+    albums.writeDiskCache('aa11bb22', 'A', 'B', 'first');
+    albums.writeDiskCache('aa11bb22', 'A', 'B', 'second');
+    const rows = openDb().prepare('SELECT record FROM gnudb_cache WHERE disc_id = ?').all('aa11bb22');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].record).toBe('second');
   });
 
-  it('should still join with a dash when artist and title are both empty (empty-but-truthy suffix)', () => {
-    albums.writeDiskCache('cafebabe', '', '', 'DTITLE=A / B\n');
-    expect(fs.readdirSync(CACHE_DIR)).toEqual(['cafebabe--.txt']);
-  });
-
-  it('should log a warning and not throw when the disk write fails', () => {
-    const spy = jest.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => { throw new Error('disk full'); });
+  it('should log a warning and not throw when the write fails', () => {
+    const spy = jest.spyOn(openDb(), 'prepare').mockImplementationOnce(() => { throw new Error('disk full'); });
     expect(() => albums.writeDiskCache('badid', 'A', 'B', 'text')).not.toThrow();
     expect(require('../src/logger').warn).toHaveBeenCalledWith(expect.stringContaining('disk full'));
     spy.mockRestore();
   });
 
-  it('should use empty string for null/undefined artist or title in the file stem', () => {
-    albums.writeDiskCache('ffffffff', undefined, null, 'DTITLE=A / B\n');
-    const [file] = fs.readdirSync(CACHE_DIR);
-    expect(file.startsWith('ffffffff--')).toBe(true);
-  });
-
-  it('should purge expired cache files (mtime older than the TTL) but keep fresh ones', async () => {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    const oldFile = path.join(CACHE_DIR, 'old-A-B.txt');
-    const freshFile = path.join(CACHE_DIR, 'fresh-A-B.txt');
-    const nonTxt = path.join(CACHE_DIR, 'ignored.json');
-    fs.writeFileSync(oldFile, 'old');
-    fs.writeFileSync(freshFile, 'fresh');
-    fs.writeFileSync(nonTxt, '{}');
-    const oldTime = new Date(Date.now() - 999_999_999);
-    fs.utimesSync(oldFile, oldTime, oldTime);
+  it('should purge expired records but keep fresh ones', async () => {
+    seedCache('old00001', 'old', 999_999_999);
+    seedCache('fresh001', 'fresh', 0);
 
     albums.purgeDiskCache();
-    // purgeDiskCache defers its work via setImmediate - flush the microtask/immediate queue
+    // purgeDiskCache defers its work via setImmediate - flush the immediate queue
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    const remaining = fs.readdirSync(CACHE_DIR).sort();
-    expect(remaining).toEqual(['fresh-A-B.txt', 'ignored.json']);
-    expect(require('../src/logger').info).toHaveBeenCalledWith(expect.stringContaining('[cache] purged:'));
-    expect(require('../src/logger').info).toHaveBeenCalledWith(expect.stringContaining('expired at'));
-  });
-
-  it('should not throw when the cache directory does not exist', async () => {
-    fs.rmSync(CACHE_DIR, { recursive: true, force: true });
-    expect(() => albums.purgeDiskCache()).not.toThrow();
-    await new Promise((resolve) => setImmediate(resolve));
+    const remaining = openDb().prepare('SELECT disc_id FROM gnudb_cache ORDER BY disc_id').all().map((r) => r.disc_id);
+    expect(remaining).toEqual(['fresh001']);
+    expect(require('../src/logger').info).toHaveBeenCalledWith(expect.stringContaining('[cache] purged'));
   });
 });
 
 describe('findAlbumLive - disk cache hit/miss', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    fs.rmSync(CACHE_DIR, { recursive: true, force: true });
+    openDb().exec('DELETE FROM gnudb_cache');
   });
-  afterAll(() => { fs.rmSync(CACHE_DIR, { recursive: true, force: true }); });
   /**
    * A req whose rawTocHex is NOT a seed key, so findAlbumLive falls through to the disk cache.
    * @param {string} tocHex - value to use as rawTocHex (the memory-cache key)
@@ -359,8 +342,7 @@ describe('findAlbumLive - disk cache hit/miss', () => {
   it('should serve a fresh disk-cache entry without calling gnudb', async () => {
     const req = unseededReq('01020304');
     const discId = discIdFor(req);
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(path.join(CACHE_DIR, `${discId}-Cached-Artist.txt`), 'DTITLE=Cached Artist / Cached Title\n');
+    seedCache(discId, 'DTITLE=Cached Artist / Cached Title\n');
     parseAlbum.mockReturnValue({
       albumTitle: 'Cached Title', albumArtist: 'Cached Artist', albumGenre: 'Rock', albumYear: '1999', albumDisc: 0,
       tracks: [{ title: 'A' }, { title: 'B' }],
@@ -376,16 +358,9 @@ describe('findAlbumLive - disk cache hit/miss', () => {
     expect(require('../src/logger').info).toHaveBeenCalledWith(expect.stringContaining('fresh until'));
   });
 
-  it('should skip files with a mismatched discId prefix or non-.txt extension', async () => {
-    // uses same toc as other unseededReq calls, so same discId - but a fresh rawTocHex key
+  it('should fall through to gnudb when the disc id has no cache row', async () => {
     const req = unseededReq('eeff0011');
-    const discId = discIdFor(req);
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    // wrong prefix → !startsWith branch (continue taken)
-    fs.writeFileSync(path.join(CACHE_DIR, 'nomatch.txt'), 'noise');
-    // right prefix, wrong ext → !endsWith('.txt') branch (continue taken)
-    fs.writeFileSync(path.join(CACHE_DIR, `${discId}-data.json`), 'DTITLE=data');
-    // no matching ${discId}-*.txt → readDiskCache returns null → gnudb fallback
+    seedCache('00000000', 'DTITLE=Other / Disc\n');
     queryCddbMatches.mockResolvedValue([]);
     const album = await albums.findAlbumLive(req);
     expect(album).toBeNull();
@@ -395,8 +370,7 @@ describe('findAlbumLive - disk cache hit/miss', () => {
   it('should use empty string for year when the disk-cache record has no DYEAR', async () => {
     const req = unseededReq('ccddccdd');
     const discId = discIdFor(req);
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(path.join(CACHE_DIR, `${discId}-No-Year.txt`), 'DTITLE=No Year / No Year\n');
+    seedCache(discId, 'DTITLE=No Year / No Year\n');
     parseAlbum.mockReturnValue({
       albumTitle: 'No Year', albumArtist: 'No Year', albumGenre: 'Unknown', albumDisc: 0,
       tracks: [{ title: 'A' }],
@@ -408,11 +382,7 @@ describe('findAlbumLive - disk cache hit/miss', () => {
   it('should reuse an expired disk-cache entry instead of hitting gnudb, and renew its freshness', async () => {
     const req = unseededReq('05060708');
     const discId = discIdFor(req);
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    const file = path.join(CACHE_DIR, `${discId}-Old.txt`);
-    fs.writeFileSync(file, 'DTITLE=Old / Stale\n');
-    const oldTime = new Date(Date.now() - 999_999_999);
-    fs.utimesSync(file, oldTime, oldTime);
+    seedCache(discId, 'DTITLE=Old / Stale\n', 999_999_999);
 
     parseAlbum.mockReturnValue({
       albumTitle: 'Old', albumArtist: 'Stale', albumGenre: '', albumDisc: 0,
@@ -426,10 +396,9 @@ describe('findAlbumLive - disk cache hit/miss', () => {
     expect(queryCddbMatches).not.toHaveBeenCalled();
     expect(fetchCddbRecord).not.toHaveBeenCalled();
     expect(require('../src/logger').info).toHaveBeenCalledWith(expect.stringContaining('[cache] renewed:'));
-    // the file must no longer look expired - a concurrent purge sweep must not delete it
-    // (rounded: Windows round-trips mtime through 100ns FILETIME units, which can leave
-    // the ms-precision double a fraction below the exact value, e.g. ...417.999 vs ...418)
-    expect(Math.round(fs.statSync(file).mtimeMs)).toBeGreaterThanOrEqual(before);
+    // the row must no longer look expired - a concurrent purge sweep must not delete it
+    const { fetched_at: fetchedAt } = openDb().prepare('SELECT fetched_at FROM gnudb_cache WHERE disc_id = ?').get(discId);
+    expect(fetchedAt).toBeGreaterThanOrEqual(before);
   });
 });
 
@@ -451,7 +420,7 @@ describe('findAlbumLive - test mode (fixed record)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    fs.rmSync(CACHE_DIR, { recursive: true, force: true });
+    openDb().exec('DELETE FROM gnudb_cache');
     // test mode parses the fixed record with the real parser (cddb is mocked here)
     parseAlbum.mockImplementation(realParseAlbum);
     tmpFile = path.join(os.tmpdir(), `ps3-cddb-test-${process.pid}-${Date.now()}.txt`);

@@ -38,7 +38,7 @@ function parseBinHeader(body) {
  * @param {[number, number]} [opts.version] - protocol version bytes
  * @param {number} [opts.sessionField] - session field (u32 BE)
  * @param {string|Buffer} [opts.secret] - console MAC/secret; defaults to the last captured console's MAC
- * @param {string} [opts.user] - username; defaults to config.client.userName
+ * @param {string} [opts.user] - username; defaults to 'AMG Test User'
  * @param {number} [opts.transformSelector] - transform selector (u16 LE)
  * @param {number} [opts.integritySelector] - integrity selector (u16 LE)
  * @param {string} [opts.variant] - single-character protocol variant
@@ -49,6 +49,7 @@ function parseBinHeader(body) {
  * @throws {Error} when no secret is given and no console MAC has been captured yet
  */
 function buildBinHeader(opts) {
+  const userName = "AMG Test User";
   const b = Buffer.alloc(HEADER_SIZE);
   MAGIC.copy(b, 0);
   b[4] = opts.version?.[0] ?? 0x02;
@@ -64,7 +65,7 @@ function buildBinHeader(opts) {
   Buffer.from(secretValue).copy(secret);
   secret.copy(b, 0x0a);
   const user = Buffer.alloc(16);
-  Buffer.from(opts.user ?? config?.client?.userName).copy(user);
+  Buffer.from(opts.user ?? userName).copy(user);
   user.copy(b, 0x1a);
   b.writeUInt16LE(opts.transformSelector ?? 3, 0x2a);
   b.writeUInt16LE(opts.integritySelector ?? 3, 0x2c);
