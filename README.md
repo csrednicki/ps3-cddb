@@ -50,6 +50,8 @@ Edit `api/config.json` before the first run:
 npm start
 ```
 
+<img width="1185" height="420" alt="Zrzut ekranu 2026-09-20 202711" src="https://github.com/user-attachments/assets/376a9b71-e561-4f90-acb6-abd607977288" />
+
 On Windows, run the terminal **as Administrator** (ports 53/80 are privileged on some setups); on Linux use `sudo` or `setcap`.
 
 ### Test mode (fixed response)
@@ -106,6 +108,13 @@ Open `http://<host>/` in a browser to see every disc the console has looked up, 
 - **Grouped by disc**: if gnudb returns several candidate matches for the same disc, they're grouped under one card; clicking it opens a modal listing every candidate with its own cover and tracklist, so you can tell similar releases apart.
 - **Cover art**: fetched once from [coverartarchive.org](https://coverartarchive.org/) and cached in the database, served locally from `GET /cover/<discId>` so the gallery still works if that service is unreachable later. Click a cover to open it full-size.
 - **Persistent**: every disc, its candidate matches, and cover art are stored in database.
+
+<img width="1461" height="1221" alt="Zrzut ekranu 2026-09-20 220236" src="https://github.com/user-attachments/assets/b081093b-2d17-4a1a-9390-4c8d97a451b7" />
+
+<img width="1457" height="1215" alt="Zrzut ekranu 2026-09-20 220252" src="https://github.com/user-attachments/assets/92ae3831-9297-4642-a7d7-208ef9e62d62" />
+
+
+
 
 ## Security
 
