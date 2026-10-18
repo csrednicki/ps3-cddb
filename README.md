@@ -88,11 +88,11 @@ Open `http://<host>/` in a browser to see every disc the console has looked up, 
 
 ### Main page
 
-<img src="https://github.com/user-attachments/assets/b081093b-2d17-4a1a-9390-4c8d97a451b7" />
+<img alt="main page image" src="https://github.com/user-attachments/assets/cec7010c-6b25-4e9d-b895-44b4ce28bbc3" />
 
 ### CD metadata modal window
 
-<img src="https://github.com/user-attachments/assets/92ae3831-9297-4642-a7d7-208ef9e62d62" />
+<img alt="cd metadata modai window image" src="https://github.com/user-attachments/assets/1788e456-56ff-4479-9d0f-b1bd7c6e287e" />
 
 ## Security
 
